@@ -2,8 +2,7 @@
 
 A tool that recommends the best time to schedule highway construction on the
 A3 (Germany), based on real historical traffic data and seasonal forecasting.
-Built during the ConStructAI Hackathon @ THWS (June 2026), later cleaned up
-and extended.
+Built during the ConStructAI Hackathon @ THWS (June 2026).
 
 Pick a location, a direction, a construction duration, and your daily working
 hours — the tool returns a specific recommended date range, backed by real
