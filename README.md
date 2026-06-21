@@ -17,7 +17,7 @@ seasonal alternative based on a Prophet forecast.
 
 ![A3 vehicle density heatmap](screenshots/ss_heatmap.png)
   
-![A3 network map](screenshots/ss_map.png)
+
 
 
 ## What it does
