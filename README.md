@@ -45,8 +45,8 @@ All traffic and station data comes from BASt (Bundesanstalt für
 Straßenwesen), Germany's federal road authority:
 
 - **Hourly traffic counts** (the `zst*.csv` files, one per station per
-  year): [BASt — Stundenwerte](https://www.bast.de/DE/Verkehrstechnik/Fachthemen/v2-verkehrszaehlung/Stundenwerte.html)
-- **Station coordinates and metadata** (`Jawe2022.csv`): [BASt — Jahresdaten](https://www.bast.de/DE/Verkehrstechnik/Fachthemen/v2-verkehrszaehlung/Jahresdaten.html)
+  year): [BASt — Stundenwerte](https://open.bydata.de/datasets?locale=de&query=Autobahn+Z%C3%A4hlstellen+A3&page=1&limit=10)
+- **Station coordinates and metadata** (`Jawe2022.csv`): [BASt — Jahresdaten](https://www.bast.de/DE/Themen/Digitales/HF_1/Massnahmen/verkehrszaehlung/Daten/2022_1/Jawe2022.html?nn=414410)
 
 Both are free to download, no account needed. The sections below walk
 through exactly how to turn what you download into the folder structure
