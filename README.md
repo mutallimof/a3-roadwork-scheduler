@@ -11,13 +11,13 @@ seasonal alternative based on a Prophet forecast.
 
 ---
 
-![Main input screen](ss_main.png)
+![Main input screen](screenshots/ss_main.png)
 
-![Recommended schedule and scoring breakdown](ss_results.png)
+![Recommended schedule and scoring breakdown](screenshots/ss_results.png)
 
-![A3 vehicle density heatmap](ss_heatmap.png)
+![A3 vehicle density heatmap](screenshots/ss_heatmap.png)
 
-![A3 network map](ss_map.png)
+![A3 network map](screenshots/ss_map.png)
 
 
 ## What it does
