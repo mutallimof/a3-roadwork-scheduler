@@ -11,6 +11,15 @@ seasonal alternative based on a Prophet forecast.
 
 ---
 
+![Main input screen](ss_main.png)
+
+![Recommended schedule and scoring breakdown](ss_results.png)
+
+![A3 vehicle density heatmap](ss_heatmap.png)
+
+![A3 network map](ss_map.png)
+
+
 ## What it does
 
 - Loads real hourly traffic counts from BASt (Bundesanstalt für
