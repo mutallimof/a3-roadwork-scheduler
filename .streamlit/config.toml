@@ -1,0 +1,13 @@
+# Custom theme for the A3 Roadwork Scheduler — a calm, professional palette
+# (slate blue + off-white) rather than Streamlit's defaults. See README.md
+# for the full design notes.
+[theme]
+base = "light"
+primaryColor = "#2f5d8a"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f4f6f8"
+textColor = "#1f2937"
+font = "sans serif"
+
+[browser]
+gatherUsageStats = false

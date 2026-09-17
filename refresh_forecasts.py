@@ -9,6 +9,11 @@ Includes German national public holidays as a Prophet regressor, so the
 model can learn a separate effect for holiday traffic instead of folding
 it into the regular weekly/yearly pattern.
 
+Each station's per-month result stores the mean forecast plus Prophet's
+80% confidence interval (yhat_lower/yhat_upper), not just a point value:
+
+    {"<station_id>": {"<month>": {"mean": .., "lo": .., "hi": ..}, ...}}
+
 Run this manually whenever new yearly data has been added and you want
 the seasonal forecasts to reflect it. This is NOT run automatically by
 the app, since fitting Prophet across all stations takes several minutes.
@@ -21,9 +26,15 @@ Usage:
 """
 
 import json
+from typing import Dict
+
 import pandas as pd
-from prophet import Prophet
 from data_utils import load_traffic_data
+
+# Prophet is imported lazily, inside main(), rather than at module level:
+# GERMAN_HOLIDAYS and prepare_station_series() below are reused by
+# evaluate_models.py, which must be importable even when prophet isn't
+# installed (it can still run the seasonal-naive and LightGBM backtests).
 
 
 # German national public holidays (fixed + Easter-based, 2019-2026).
@@ -52,7 +63,8 @@ GERMAN_HOLIDAYS = pd.DataFrame({
 })
 
 
-def prepare_station_series(df, station_id):
+def prepare_station_series(df: pd.DataFrame, station_id) -> pd.DataFrame:
+    """Builds Prophet's expected (ds, y) hourly series for one station."""
     station_df = df[df['Zst'] == station_id].copy()
     station_df['ds'] = station_df['Datum'] + pd.to_timedelta(station_df['Stunde'], unit='h')
     station_df = station_df[['ds', 'total_traffic']].rename(columns={'total_traffic': 'y'})
@@ -60,14 +72,16 @@ def prepare_station_series(df, station_id):
     return station_df
 
 
-def main():
+def main() -> None:
+    from prophet import Prophet
+
     print("Loading traffic data...")
     df = load_traffic_data()
 
     station_ids = df['Zst'].unique()
     print(f"Found {len(station_ids)} stations. Fitting Prophet for each (this takes a while)...\n")
 
-    results = {}
+    results: Dict[int, Dict[int, Dict[str, float]]] = {}
     for sid in station_ids:
         try:
             series = prepare_station_series(df, sid)
@@ -79,17 +93,27 @@ def main():
                 yearly_seasonality=True,
                 weekly_seasonality=True,
                 daily_seasonality=False,
-                holidays=GERMAN_HOLIDAYS
+                holidays=GERMAN_HOLIDAYS,
+                interval_width=0.8,
             )
             m.fit(series)
 
             future = m.make_future_dataframe(periods=8760, freq='h')
             forecast = m.predict(future)
             forecast['yhat'] = forecast['yhat'].clip(lower=0)
+            forecast['yhat_lower'] = forecast['yhat_lower'].clip(lower=0)
+            forecast['yhat_upper'] = forecast['yhat_upper'].clip(lower=0)
             forecast['month'] = forecast['ds'].dt.month
 
-            monthly_avg = forecast.groupby('month')['yhat'].mean().to_dict()
-            results[int(sid)] = {int(k): float(v) for k, v in monthly_avg.items()}
+            monthly = forecast.groupby('month')[['yhat', 'yhat_lower', 'yhat_upper']].mean()
+            results[int(sid)] = {
+                int(month): {
+                    'mean': float(row['yhat']),
+                    'lo': float(row['yhat_lower']),
+                    'hi': float(row['yhat_upper']),
+                }
+                for month, row in monthly.iterrows()
+            }
 
             print(f"Done: {sid} ({len(results)}/{len(station_ids)})")
         except Exception as e:

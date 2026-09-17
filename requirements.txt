@@ -1,0 +1,20 @@
+# Core app
+streamlit==1.38.0
+pandas==2.2.2
+numpy==1.26.4
+matplotlib==3.8.4
+pyproj==3.6.1
+folium==0.16.0
+streamlit-folium==0.21.0
+requests==2.32.3
+
+# Seasonal forecasting (refresh_forecasts.py) and model backtesting (evaluate_models.py).
+# Heavier than the rest and only needed for those two offline scripts — not
+# imported by app.py itself — but pinned here too for a single reproducible
+# install. See README.md for when to run each script.
+prophet==1.1.5
+lightgbm==4.3.0
+scikit-learn==1.4.2
+
+# Testing
+pytest==8.2.0
