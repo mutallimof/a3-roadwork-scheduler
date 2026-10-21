@@ -4,6 +4,10 @@ import os
 import re
 from pyproj import Transformer
 
+# Data files are looked up next to this file, so the app works no matter
+# which directory it is started from.
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 
 def fix_utm(value):
     # UTM coordinates use thousands-grouping in 3-digit blocks, but the last
@@ -15,7 +19,7 @@ def fix_utm(value):
     return float(fixed)
 
 
-def discover_year_folders(base_path='.'):
+def discover_year_folders(base_path=BASE_DIR):
     """
     Scans base_path for folders named with exactly 4 digits (e.g. '2019',
     '2023', '2024') that contain at least one CSV file, and returns them
@@ -32,9 +36,9 @@ def discover_year_folders(base_path='.'):
     return sorted(year_folders)
 
 
-def load_year(year):
+def load_year(year, base_path=BASE_DIR):
     # Loads and concatenates every CSV inside a single year folder
-    files = glob.glob(f'{year}\\*.csv')
+    files = glob.glob(os.path.join(base_path, str(year), '*.csv'))
     dfs = []
     for f in files:
         try:
@@ -97,7 +101,7 @@ def load_traffic_data(min_stations=5):
 def load_coordinates():
     # Loads station coordinates + metadata from the yearly-average file,
     # filters to A3 only, fixes the UTM formatting, converts to lat/lon
-    coords = pd.read_csv('Jawe2022.csv', sep=';', encoding='latin-1')
+    coords = pd.read_csv(os.path.join(BASE_DIR, 'Jawe2022.csv'), sep=';', encoding='latin-1')
     coords = coords[['DZ_Nr', 'DZ_Name', 'Str_Kl', 'Str_Nr',
                       'Koor_UTM32_E', 'Koor_UTM32_N',
                       'Fernziel_Ri1', 'Fernziel_Ri2']]
