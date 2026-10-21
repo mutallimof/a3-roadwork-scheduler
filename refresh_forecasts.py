@@ -83,7 +83,10 @@ def main():
             )
             m.fit(series)
 
-            future = m.make_future_dataframe(periods=8760, freq='h')
+            # Only the year after the training data. With the default
+            # include_history=True the monthly averages below would also
+            # include the model's fitted values for the training years.
+            future = m.make_future_dataframe(periods=8760, freq='h', include_history=False)
             forecast = m.predict(future)
             forecast['yhat'] = forecast['yhat'].clip(lower=0)
             forecast['month'] = forecast['ds'].dt.month
