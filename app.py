@@ -3,9 +3,10 @@ import folium
 from streamlit_folium import st_folium
 import pandas as pd
 import matplotlib.pyplot as plt
-from data_utils import load_traffic_data, load_coordinates
+from data_utils import load_traffic_data, load_coordinates, BASE_DIR
 import datetime
 import json
+import os
 import requests
 
 st.set_page_config(layout="wide", page_title="A3 Roadwork Scheduler")
@@ -22,9 +23,9 @@ def load_data():
 @st.cache_data
 def load_prophet_results():
     try:
-        with open('prophet_results.json') as f:
+        with open(os.path.join(BASE_DIR, 'prophet_results.json')) as f:
             return json.load(f)
-    except FileNotFoundError:
+    except (FileNotFoundError, json.JSONDecodeError):
         return {}
 
 def get_weather_outlook(lat, lon, target_date):
@@ -45,8 +46,28 @@ def get_weather_outlook(lat, lon, target_date):
     except Exception:
         return None
 
+SETUP_HINT = ("See the README section \"Setting up your data folders\": the app needs year folders "
+              "(for example `2019/`, `2023/`) with BASt hourly CSV files, and `Jawe2022.csv`, "
+              f"in the project folder (`{BASE_DIR}`).")
+
 prophet_results = load_prophet_results()
-df, coords = load_data()
+try:
+    df, coords = load_data()
+except FileNotFoundError as e:
+    st.error(f"Traffic data not found. {SETUP_HINT}")
+    with st.expander("Technical details"):
+        st.code(str(e))
+    st.stop()
+except Exception as e:
+    st.error(f"The traffic data could not be loaded. {SETUP_HINT}")
+    with st.expander("Technical details"):
+        st.code(f"{type(e).__name__}: {e}")
+    st.stop()
+
+if coords.empty:
+    st.error(f"`Jawe2022.csv` was loaded but contains no A3 stations. {SETUP_HINT}")
+    st.stop()
+
 days_map = {1:'Mon', 2:'Tue', 3:'Wed', 4:'Thu', 5:'Fri', 6:'Sat', 7:'Sun'}
 month_names = {1:'January',2:'February',3:'March',4:'April',5:'May',6:'June',
                7:'July',8:'August',9:'September',10:'October',11:'November',12:'December'}
@@ -81,6 +102,8 @@ if st.button("🔍 Find Best Schedule", type="primary"):
     st.session_state.show_results = True
     st.session_state.station_id = station_id
     st.session_state.station_name = station_name
+    st.session_state.station_lat = station_row['lat']
+    st.session_state.station_lon = station_row['lon']
     st.session_state.duration_weeks = duration_weeks
     st.session_state.work_hours = work_hours
     st.session_state.direction_choice = direction_choice
@@ -149,7 +172,7 @@ if st.session_state.show_results:
         end_date = start_date + datetime.timedelta(weeks=duration_weeks)
 
         st.success(f"### ✅ Recommended schedule: **{start_date.strftime('%d %B')} → {end_date.strftime('%d %B')}**")
-        st.write(f"Affecting: **{direction_choice}** — Work during **{best['day_name']}s, {int(best['Stunde'])}:00–{int(best['Stunde'])+4}:00**, repeating weekly until the project is complete.")
+        st.write(f"Affecting: **{direction_choice}** — Work during **{best['day_name']}s, {int(best['Stunde'])}:00–{(int(best['Stunde'])+4) % 24}:00**, repeating weekly until the project is complete.")
 
         st.subheader("📅 Project Timeline")
         t1, t2, t3 = st.columns(3)
@@ -158,7 +181,7 @@ if st.session_state.show_results:
         t3.metric("Recommended end", end_date.strftime('%d %B %Y'))
 
         if duration_weeks <= 2:
-            weather = get_weather_outlook(station_row['lat'], station_row['lon'], start_date)
+            weather = get_weather_outlook(st.session_state.station_lat, st.session_state.station_lon, start_date)
             if weather:
                 rain, temp = weather
                 st.write(f"🌦️ Weather outlook for {start_date.strftime('%d %B')}: **{temp:.0f}°C**, **{rain:.1f}mm** precipitation expected. (Forecasts beyond ~15 days aren't reliable, so this only shows for near-term, short-duration projects.)")
@@ -205,15 +228,18 @@ if st.session_state.show_results:
             .rename(columns={'day_name':'Day','Stunde':'Hour','avg_traffic':'Avg Traffic/hr','avg_truck_ratio':'Truck Ratio','final_score':'Score'})
             .style.format({'Hour':'{:.0f}','Avg Traffic/hr':'{:.0f}','Truck Ratio':'{:.1%}','Score':'{:.2f}'})
             .background_gradient(subset=['Score'], cmap='RdYlGn'),
-            use_container_width=True
+            width='stretch'
         )
 
         st.subheader("📊 Full Weekly Pattern")
         full_pivot = station_data.groupby(['Wotag','Stunde'])['effective_traffic'].mean().unstack()
         fig, ax = plt.subplots(figsize=(12,4))
         im = ax.imshow(full_pivot.values, aspect='auto', cmap='RdYlGn_r')
-        ax.set_yticks(range(7))
-        ax.set_yticklabels(['Mon','Tue','Wed','Thu','Fri','Sat','Sun'])
+        ax.set_yticks(range(len(full_pivot.index)))
+        ax.set_yticklabels([days_map.get(d, d) for d in full_pivot.index])
+        # Label columns with the actual hour values (BASt hours run 1-24, not 0-23)
+        ax.set_xticks(range(len(full_pivot.columns)))
+        ax.set_xticklabels([int(h) for h in full_pivot.columns])
         ax.set_xlabel("Hour of day")
         ax.set_title(f"{station_name} — {direction_choice}")
         plt.colorbar(im, label='Avg vehicles/hour')
@@ -250,7 +276,8 @@ if st.session_state.show_results:
         '''
         m.get_root().html.add_child(folium.Element(legend_html))
 
-        route_coords = map_data.dropna(subset=['lat','lon']).sort_values('lon')[['lat','lon']].values.tolist()
+        map_data = map_data.dropna(subset=['lat', 'lon'])
+        route_coords = map_data.sort_values('lon')[['lat','lon']].values.tolist()
         folium.PolyLine(route_coords, color='#1f77b4', weight=5, opacity=0.85, dash_array='10').add_to(m)
 
         for i, row in map_data.iterrows():
