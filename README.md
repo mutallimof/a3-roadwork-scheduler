@@ -1,243 +1,274 @@
 # A3 Roadwork Scheduler
 
-A tool that recommends the best time to schedule highway construction on the
-A3 (Germany), based on real historical traffic data and seasonal forecasting.
-Built during the ConStructAI Hackathon @ THWS (June 2026).
+A Streamlit app that suggests when to schedule roadworks at a traffic
+counting station on the A3 motorway in Bavaria, Germany. It uses historical
+hourly traffic counts from BASt (Bundesanstalt für Straßenwesen, Germany's
+federal road research institute) and, for long projects, precomputed
+seasonal values from a Prophet model.
 
-Pick a location, a direction, a construction duration, and your daily working
-hours — the tool returns a specific recommended date range, backed by real
-traffic numbers, an estimated CO2 impact, and (for longer projects) a
-seasonal alternative based on a Prophet forecast.
-
----
-
-![Main input screen](screenshots/ss_main.png)
-
-![Recommended schedule and scoring breakdown](screenshots/ss_results.png)
-
-![A3 vehicle density heatmap](screenshots/ss_heatmap.png)
-  
-
-
-
-## What it does
-
-- Loads real hourly traffic counts from BASt (Bundesanstalt für
-  Straßenwesen — Germany's federal road authority) across all available
-  years and stations on the A3
-- Scores every (weekday, hour) combination by traffic volume and truck
-  ratio, in priority order
-- Lets you pick which direction of traffic is affected (using the road's
-  real destination labels, e.g. "→ Frankfurt am Main")
-- Returns a specific recommended calendar date range, not just an abstract
-  "Sunday morning"
-- For projects longer than 6 weeks, also suggests a seasonal alternative
-  start month, using a Prophet forecast per station
-- Shows a short-term weather outlook (next 15 days) for short-duration
-  projects
-- Visualizes the full weekly traffic pattern as a heatmap, and the whole
-  A3 network as a colored map
+Built during the ConStructAI Hackathon at THWS (June 2026) for the challenge
+"Data-Based Forecasting for Road Renovation Scheduling", and cleaned up
+afterwards.
 
 ---
 
-## Background
+## What the app shows
 
-This project was built for the "Data-Based Forecasting for Road Renovation
-Scheduling" challenge at the ConStructAI Hackathon (THWS, June 2026): given
-real traffic data, recommend the optimal timing for A3 highway roadworks to
-minimize disruption. It was cleaned up and extended afterward into the
-version in this repository.
+You choose a counting station, the affected side of the road, the earliest
+start date, the project duration in weeks and the daily working hours. The
+app then shows:
 
-### Where the data comes from
+- **The recommended time**: a weekday, a time window and a calendar date
+  range, with a short note on how it was chosen.
+- **Key numbers**: average traffic in the recommended hour, how much lower
+  that is than the worst slot inside your working hours, and a rough CO2
+  estimate.
+- **Seasonal alternative** (projects longer than 6 weeks): the month with the
+  lowest value in the precomputed seasonal data, an alternative date range in
+  that month, and a bar chart of all 12 monthly values.
+- **Weekly traffic pattern**: a heatmap of measured average vehicles per hour
+  for each weekday and hour at the selected station, with the recommended
+  slot marked.
+- **Top 5 time slots** and an explanation of the score.
+- **A3 network map**: all counting stations coloured by average traffic.
+- **Weather** (projects of 1-2 weeks starting within about 15 days): a
+  short-term forecast from Open-Meteo. It is shown for information only and
+  does not change the recommendation.
 
-All traffic and station data comes from BASt (Bundesanstalt für
-Straßenwesen), Germany's federal road authority:
+> **Screenshot placeholder 1: input panel.** Capture the top of the page
+> before clicking "Find best schedule" (title, data summary line, "Where" and
+> "When" panel). Save as `screenshots/ss_main.png`.
 
-- **Hourly traffic counts** (the `zst*.csv` files, one per station per
-  year): [BASt — Stundenwerte](https://open.bydata.de/datasets?locale=de&query=Autobahn+Z%C3%A4hlstellen+A3&page=1&limit=10)
-- **Station coordinates and metadata** (`Jawe2022.csv`): [BASt — Jahresdaten](https://www.bast.de/DE/Themen/Digitales/HF_1/Massnahmen/verkehrszaehlung/Daten/2022_1/Jawe2022.html?nn=414410)
+> **Screenshot placeholder 2: recommendation.** Pick a station with data,
+> set the duration to 10 weeks, click "Find best schedule". Capture the
+> "Recommended time for the roadworks" box and the three numbers below it.
+> Save as `screenshots/ss_results.png`.
 
-Both are free to download, no account needed. The sections below walk
-through exactly how to turn what you download into the folder structure
-this tool expects.
+> **Screenshot placeholder 3: charts.** Same run as above. Capture the
+> "Seasonal alternative" bar chart and the "Weekly traffic pattern" heatmap.
+> Save as `screenshots/ss_heatmap.png`.
+
+> **Screenshot placeholder 4: map.** Same run, scroll to "A3 network
+> overview" and capture the map (needs internet). Save as
+> `screenshots/ss_map.png`.
+
+The images currently in `screenshots/` show the older version of the
+interface.
+
+---
+
+## Stack
+
+- Python (tested with 3.13)
+- Streamlit (web interface)
+- pandas (data loading and aggregation)
+- matplotlib (heatmap and monthly bar chart)
+- folium + streamlit-folium (network map)
+- pyproj (converts station coordinates from UTM32 to latitude/longitude)
+- requests (Open-Meteo weather lookup)
+- Prophet (only for `refresh_forecasts.py`, which precomputes the seasonal
+  values; the app itself does not run Prophet)
 
 ---
 
 ## Running it
 
-### Requirements
+### 1. Install
 
 ```
-pip install streamlit pandas matplotlib pyproj folium streamlit-folium requests
+git clone https://github.com/mutallimof/a3-roadwork-scheduler.git
+cd a3-roadwork-scheduler
+python -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
 ```
 
-Prophet is needed separately, only for regenerating forecasts (see below):
+### 2. Add the data
+
+The traffic data is **not included in this repository**. Without it the app
+starts but shows an error message explaining what is missing. See
+"Setting up your data folders" below.
+
+### 3. Start
 
 ```
-pip install prophet
+streamlit run app.py
 ```
+
+Streamlit prints a local URL (usually http://localhost:8501). Open it in a
+browser.
+
+The map and the weather outlook need an internet connection (map tiles and
+the map library are loaded from the internet). Everything else works offline.
+
+**How these steps were checked:** a fresh clone, Linux, Python 3.13,
+streamlit 1.66, pandas 3.0. The real BASt files were not available in the
+test environment, so the app was run against generated files in the same
+format as the BASt files (same columns, separators and encoding). This tested
+that the code runs; it did not test any results. The Windows activation
+command was not tested.
 
 ### Setting up your data folders
 
-BASt's download gives you a set of zipped CSVs, one per station, for a
-chosen year. Here's how to turn that into what `data_utils.py` expects:
+All traffic and station data comes from BASt:
 
-1. Go to the BASt Stundenwerte page linked above and download the hourly
-   data for a year (e.g. 2019). It comes as a `.zip` file.
-2. **Unzip it.** Inside, you'll find one CSV per station, named something
-   like `zst9010_2019.csv`.
-3. In your project folder, **create a new folder named exactly after the
-   year**, e.g. `2019`.
-4. **Move all the unzipped CSVs for that year into that folder.**
-5. Repeat for any other year you want to include (e.g. download 2023,
-   unzip, create a `2023` folder, move its CSVs in).
-6. Download `Jawe2022.csv` from the Jahresdaten page and place it directly
-   in the project's root folder (not inside a year folder) — it's used
-   once for station coordinates and direction labels, not per-year.
+- **Hourly traffic counts** (the `zst*.csv` files, one per station per
+  year): [BASt — Stundenwerte](https://open.bydata.de/datasets?locale=de&query=Autobahn+Z%C3%A4hlstellen+A3&page=1&limit=10)
+- **Station coordinates and metadata** (`Jawe2022.csv`): [BASt — Jahresdaten](https://www.bast.de/DE/Themen/Digitales/HF_1/Massnahmen/verkehrszaehlung/Daten/2022_1/Jawe2022.html?nn=414410)
 
-Once this is done, your folder should look like:
+Both are free to download, no account needed.
+
+1. Download the hourly data for a year (e.g. 2019) from the Stundenwerte
+   page. It comes as a `.zip` file.
+2. Unzip it. Inside is one CSV per station, named like `zst9010_2019.csv`.
+3. In the project folder, create a folder named exactly after the year,
+   e.g. `2019`.
+4. Move all CSVs for that year into that folder.
+5. Repeat for other years (the original analysis uses 2019 and 2023).
+6. Download `Jawe2022.csv` and put it directly in the project folder (not
+   inside a year folder).
+
+The folder should then look like:
 
 ```
-your-project-folder/
+a3-roadwork-scheduler/
 ├── app.py
 ├── data_utils.py
 ├── refresh_forecasts.py
+├── requirements.txt
 ├── Jawe2022.csv            (station coordinates + metadata)
-├── prophet_results.json    (precomputed seasonal forecasts)
-├── 2019/                   (one folder per year of traffic data)
+├── prophet_results.json    (precomputed seasonal values, included)
+├── 2019/
 │   ├── zst9010_2019.csv
-│   ├── zst9011_2019.csv
 │   └── ...
 └── 2023/
     ├── zst9010_2023.csv
     └── ...
 ```
 
-`data_utils.py` automatically scans for any folder named with exactly 4
-digits and loads whatever CSVs are inside — you don't need to tell it
-which years exist anywhere in the code.
-
-### Start the app
-
-```
-streamlit run app.py
-```
+`data_utils.py` loads every folder in the project folder whose name is
+exactly 4 digits and contains CSV files. Paths are relative to the project
+folder, so the app can be started from any directory.
 
 ---
 
 ## Adding new yearly data
 
-The historical scoring layer updates automatically, but the seasonal
-(Prophet) forecast needs a manual refresh. These two layers are separate
-on purpose — fitting Prophet across every station takes several minutes,
-so it's a deliberate step rather than something the app does silently
-every time it starts.
+### 1. Historical data — automatic
 
-### 1. Historical scoring — automatic
+Add the new year folder as described above. It is picked up the next time
+the app starts. To exclude a year, remove its folder.
 
-Follow the same "Setting up your data folders" steps above for the new
-year: download from BASt, unzip, create a folder named after the year,
-move the CSVs in. `data_utils.py` automatically detects any folder with a
-4-digit name containing CSVs and includes it — no code changes needed.
+### 2. Seasonal values — manual refresh
 
-To exclude a year (for example, an anomalous year you don't want included),
-simply don't keep that folder in the project directory. This is a deliberate
-choice left to whoever manages the data, rather than something hardcoded.
+Fitting Prophet for every station takes several minutes, so it is a separate
+step:
 
-### 2. Seasonal forecast — manual refresh
+```
+pip install prophet
+python refresh_forecasts.py
+```
 
-> **Before running for the first time:** `refresh_forecasts.py` needs the
-> `prophet` package, which isn't part of the core requirements above (it's
-> heavier and only needed for this one step). If you see
-> `ModuleNotFoundError: No module named 'prophet'`, install it once with:
-> ```
-> python -m pip install prophet
-> ```
+This rewrites `prophet_results.json` from the year folders currently
+present. Restart the app afterwards.
 
-1. Add your new year folder (e.g. `2024/`) alongside the existing ones
-2. Run:
-   ```
-   python refresh_forecasts.py
-   ```
-3. This regenerates `prophet_results.json`, automatically including
-   whatever years are currently present
-4. Restart the Streamlit app
-
-The script includes German national public holidays (2019–2026) as a
-factor Prophet can learn from separately. If you add data for years beyond
-2026, extend the `GERMAN_HOLIDAYS` list at the top of `refresh_forecasts.py`.
+The script includes German national public holidays for 2019–2026. For
+later years, extend the `GERMAN_HOLIDAYS` list at the top of
+`refresh_forecasts.py`.
 
 ---
 
-## Methodology
+## Method
 
-### Data source
+### Data
 
-BASt publishes hourly traffic counts per station, per year. Each row
-includes vehicle counts in both directions (`KFZ_R1`/`KFZ_R2`), truck
-counts (`Lkw_R1`/`Lkw_R2`), the weekday, and the hour. Station coordinates
-and direction labels come from a separate yearly file (`Jawe2022.csv`).
+Each row of a BASt hourly file has vehicle counts per direction
+(`KFZ_R1`/`KFZ_R2`), truck counts (`Lkw_R1`/`Lkw_R2`), the date, the weekday
+and the hour (`Stunde`, values 1–24). Station coordinates and direction
+names (`Fernziel_Ri1`/`Fernziel_Ri2`) come from `Jawe2022.csv`. The data
+cleaning steps, including a corrected mistake in parsing the coordinates,
+are in `analysis.ipynb`.
 
-The full data-cleaning process — including a documented mistake-then-fix
-on parsing the coordinate format — is in `analysis.ipynb`.
+### Choosing the time slot
 
-### Scoring formula
-
-Every (weekday, hour) combination is scored on two factors, combined in
-priority order:
+For the selected station and side of the road, the app averages the
+historical counts for every (weekday, hour) combination inside the chosen
+working hours, and scores each one:
 
 ```
-congestion_score = 1 - (avg_traffic / max_traffic)
-freight_score     = 1 - avg_truck_ratio
-final_score        = congestion_score * freight_score
+traffic_score = 1 - (avg_traffic / highest avg_traffic among those slots)
+truck_score   = 1 - avg_truck_share
+score         = traffic_score * truck_score
 ```
 
-The two factors are multiplied, not averaged — a time slot only scores
-well if both are favorable. A low-traffic hour that happens to be
-truck-heavy gets pulled down, not just slightly discounted.
+The slot with the highest score is recommended. The start date is the first
+matching weekday after the earliest start date, and the work repeats weekly
+for the chosen number of weeks.
 
 ### CO2 estimate
 
-Scheduling roadworks during a high-traffic window is assumed to force
-affected vehicles into a ~2km detour. At ~120g CO2/km for an average car,
-that's **0.24 kg CO2 per affected vehicle** — a simplification, but
-directionally meaningful for comparing best vs. worst scheduling choices.
+Assumes every vehicle passing during the work is forced into a 2 km detour
+at 120 g CO2/km, i.e. 0.24 kg CO2 per vehicle. The app compares the best
+slot with the worst slot inside the working hours. This is a rough
+illustration, not a measured value.
 
-### Seasonal forecasting (Prophet)
+### Seasonal values (Prophet)
 
-For projects longer than 6 weeks, the historical weekly pattern alone
-isn't enough — seasonal effects matter more. Prophet is fit per station on
-the full hourly time series (yearly + weekly seasonality, plus German
-public holidays as a separate learned effect), forecasting a full year
-ahead. The resulting monthly averages are precomputed and saved to
-`prophet_results.json`, rather than run live in the app.
+For projects longer than 6 weeks the app also suggests a start month. The
+monthly values come from `prophet_results.json`, which `refresh_forecasts.py`
+produces by fitting Prophet per station on the hourly series (yearly and
+weekly seasonality, German public holidays) and averaging the predictions
+per calendar month. Stations without an entry use a fixed network-wide set
+of monthly values written into `app.py`.
 
 ---
 
 ## Limitations
 
-- **Prophet coverage:** 32 of 45 A3 stations have enough historical data
-  points for Prophet to fit reliably. The remaining 13 fall back to a
-  network-wide generic seasonal estimate instead of a station-specific one.
-- **Holiday effect is a rough signal:** with only two years of training
-  data (2019, 2023), each public holiday has just two historical examples
-  for Prophet to learn from. It picks up large, obvious effects (e.g.
-  Christmas being much quieter) but isn't a precise estimate — this will
-  improve as more years of data are added.
-- **Short-project recommendations assume a recurring weekly pattern:**
-  for projects of a few weeks, the tool finds the single best weekly
-  slot and repeats it. It doesn't yet check whether traffic stays
-  consistently low across the entire project duration, just that the
-  underlying weekly pattern is historically reliable.
-- **Weather is informational, not predictive:** the short-term weather
-  outlook (Open-Meteo) only displays for projects starting within ~15
-  days, since forecasts beyond that aren't reliable. It does not feed
-  into the scoring or seasonal forecast.
-- **Data coverage gaps:** not every station has usable files for every
-  year, due to broken or missing download links on BASt's portal. Years
-  with very few stations are flagged with a warning when loaded, but
-  still included — exclusion is a manual choice (see "Adding new yearly
-  data" above).
+- **The seasonal values in the committed `prophet_results.json` mix fitted
+  and forecast values.** Up to this branch, `refresh_forecasts.py` called
+  `make_future_dataframe(periods=8760, freq='h')`, which by default also
+  includes all training timestamps. The monthly averages were therefore
+  about two thirds Prophet's fitted values for 2019 and 2023 and one third
+  the forecast for the following year. They are model output in both cases,
+  not measured counts. The script is fixed on this branch
+  (`include_history=False`), but `prophet_results.json` has not been
+  regenerated because the data is not in the repository. It is not known
+  how much this changes the recommended month. In the committed file,
+  January is the lowest month for 24 of the 32 stations, November for 5
+  and December for 3. In the notebook's single-station test, which averaged
+  only the forecast year, November and December were lowest. Re-running
+  `refresh_forecasts.py` with the data would show whether the month changes.
+- **The app only uses the lowest month.** The seasonal suggestion picks the
+  month with the lowest value. It does not check whether the difference to
+  other months is meaningful.
+- **No accuracy has been measured.** Neither the time-slot recommendation
+  nor the Prophet values have been tested against held-out data.
+- **Two years of data with a gap.** The analysis uses 2019 and 2023
+  (2020–2022 were left out because of COVID). Prophet fits one trend across
+  the four-year gap. Each public holiday appears only twice in the training
+  data, so the holiday effect is a rough signal.
+- **Station coverage.** 32 stations have a station-specific seasonal entry.
+  The others use the fixed fallback values in `app.py`; where those values
+  came from is not documented in the code. Not every station has traffic
+  files for every year.
+- **Hour labels.** BASt's `Stunde` column runs from 1 to 24. The app shows
+  the value as a clock time (e.g. 5 → 05:00). If `Stunde` = 1 means
+  00:00–01:00 (which the 1–24 range suggests), the times shown are one hour
+  later than the hour that was counted. This has not been checked against
+  the BASt documentation.
+- **Time window vs. score.** The score is computed for single hours. The
+  app then shows a 4-hour window starting at the best hour, which can extend
+  beyond the chosen working hours. The CO2 estimate assumes 8 working hours
+  per day for both "Day" and "Night" options, although the day option
+  covers 06–18.
+- **Short projects assume a repeating weekly pattern.** The app repeats the
+  best weekly slot and does not check whether traffic stays low across the
+  whole project period.
+- **Map.** The line on the map connects stations ordered west to east and
+  only roughly follows the road. The map needs an internet connection.
+- **Weather** is shown only for short projects starting within about 15
+  days and is not used in the scoring.
 
 ---
 
@@ -246,8 +277,9 @@ ahead. The resulting monthly averages are precomputed and saved to
 | File | Purpose |
 |---|---|
 | `app.py` | The Streamlit application |
-| `data_utils.py` | Loads and cleans traffic + coordinate data, auto-detects year folders |
-| `refresh_forecasts.py` | Standalone script to regenerate `prophet_results.json` |
-| `analysis.ipynb` | Full exploratory analysis, with documented reasoning for every data decision |
-| `prophet_results.json` | Precomputed per-station seasonal forecasts |
-| `Jawe2022.csv` | Station coordinates and metadata (not included in this repo — sourced from BASt) |
+| `data_utils.py` | Loads and cleans traffic and coordinate data, finds year folders |
+| `refresh_forecasts.py` | Standalone script that regenerates `prophet_results.json` |
+| `analysis.ipynb` | Exploratory analysis with the reasoning behind data decisions |
+| `prophet_results.json` | Precomputed monthly seasonal values per station |
+| `requirements.txt` | Python packages needed to run the app |
+| `Jawe2022.csv`, `2019/`, `2023/` | BASt data, not included, see "Setting up your data folders" |
