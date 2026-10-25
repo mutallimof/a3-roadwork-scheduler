@@ -18,7 +18,7 @@ st.title("A3 Roadwork Scheduler")
 st.write("Suggests when to schedule roadworks at a counting station on the A3 motorway (Bavaria), "
          "based on historical hourly traffic counts from BASt.")
 
-SETUP_HINT = ("See the README section \"Full data\": run `python scripts/fetch_data.py` to put the "
+SETUP_HINT = ("See the README section \"Data\": run `python scripts/fetch_data.py` to put the "
               "year folders (for example `2019/`, `2023/`) and the station list (`Jawe2022.csv` or "
               f"`Jawe2023.csv`) in the project folder (`{BASE_DIR}`).")
 

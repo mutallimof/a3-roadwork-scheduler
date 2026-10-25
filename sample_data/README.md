@@ -11,7 +11,8 @@ removed.
 - `Jawe2023.csv`: the 46 A3 stations in Bavaria, with the station and
   destination names repaired as described in the main README.
 
-Source: Bundesanstalt für Straßenwesen (BASt), automatic traffic counts
-on federal motorways (hourly values) and the yearly evaluation file
-(Jawe2023). The licence terms for redistribution have not been
-confirmed; see the main README.
+Source: Bundesanstalt für Straßenwesen (BASt), automatische
+Dauerzählstellen (hourly values and the yearly evaluation file Jawe2023).
+Licence: Datenlizenz Deutschland – Namensnennung – Version 2.0,
+<https://www.govdata.de/dl-de/by-2-0>. See `DATA_LICENSE.md` in the
+repository root.

@@ -84,39 +84,67 @@ source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### 2. Choose the data
+### 2. Data
 
-#### Quick demo (no downloads)
+#### The data comes with the repository
 
-The repository includes `sample_data/`: a small extract of the real BASt
-data (stations 9033 AD Seligenstadt, 9040 AK Nürnberg and 9093 AK
-Deggendorf, March to June 2023, 0.33 MB). If the full data is not
-installed, the app uses it automatically and shows a "Demo sample" notice
-at the top. Results from the sample are for demonstration only: it covers
-four months of one year, and only these three stations can be selected.
+The clone already contains the real BASt data, ready to use:
+
+| Included | Content |
+|---|---|
+| `2018/`, `2022/`, `2023/` | Hourly counts, one file per station: 28, 16 and 19 stations on the A3 in Bavaria (551,880 rows, 125 MB) |
+| `Jawe2023.csv` | Station list: the 46 counting stations on the A3 in Bavaria, with coordinates and direction names |
+| `sample_data/` | Small extract for the demo mode (see below) |
+
+Source and licence: Bundesanstalt für Straßenwesen (BASt), automatische
+Dauerzählstellen, under the Datenlizenz Deutschland – Namensnennung –
+Version 2.0 ([dl-de/by-2-0](https://www.govdata.de/dl-de/by-2-0)). The
+files were reorganised (unzipped, renamed, Bavarian A3 only) and the
+station names in `Jawe2023.csv` were repaired; see
+[DATA_LICENSE.md](DATA_LICENSE.md).
+
+By default the app uses **2023** only of these: it is configured for 2019
+and 2023 (see "Which years the app uses"), and 2019 is not included.
+`2018/` and `2022/` are included but left out unless you set `A3_YEARS`.
 
 Nothing to do: go to step 3.
 
-#### Full data (run scripts/fetch_data.py)
+#### Adding 2019
 
-1. Get the BASt files (see "Where the data comes from" below):
-   - hourly counts ("Stundenwerte") per station and year, as zips or CSVs,
-     or the large full-year file;
-   - the station list `Jawe2022.csv` (or `Jawe2023.csv`).
-2. Put them into `raw_data/` in the project folder. Zipped or not, in
-   subfolders or not, does not matter.
-3. Run:
+The 2019 files are not in the repository yet. Put them in place in either
+of two ways:
+
+- copy the BASt downloads (zips or CSVs) for 2019 into `raw_data/` and run
+  `python scripts/fetch_data.py`; it writes `2019/zst<station>_2019.csv`;
+- or put already unzipped files named `zst<station>_2019.csv` directly
+  into a folder `2019/` in the project folder.
+
+The app then uses 2019 and 2023 automatically. Without `2019/` it shows a
+notice and continues with 2023. `2019/` is ignored by git; to commit it,
+add the line `!/2019/` to `.gitignore`.
+
+#### Rebuilding from the raw files
+
+The included folders were built from the BASt downloads with one command,
+and can be rebuilt the same way (for example after adding a year):
+
+1. Put the BASt files into `raw_data/` (not tracked by git):
+   - hourly counts ("Stundenwerte") per station and year, as zips or
+     CSVs, or the large full-year file;
+   - the station list `Jawe2022.csv` or `Jawe2023.csv`.
+   Zipped or not, in subfolders or not, does not matter.
+2. Run:
    ```
    python scripts/fetch_data.py
    ```
 
-This builds the clean layout in one command:
+What it does:
 
 - unzips everything and searches subfolders;
 - keeps only A3 rows and writes one file per station and year,
-  `<year>/zst<station>_<year>.csv`, for every year found;
-- copies the station list under its own name (`Jawe2022.csv` or
-  `Jawe2023.csv`);
+  `<year>/zst<station>_<year>.csv`, for every year found, values unchanged;
+- writes the station list under its own name, reduced to the A3 in
+  Bavaria and with damaged names repaired where this can be checked;
 - skips a station-year that appears twice and says whether the two
   copies were identical;
 - skips files that already exist (use `--force` to rewrite them);
@@ -127,9 +155,13 @@ Other options: `--source-dir <folder>` to read from another folder (e.g.
 Downloads), `--url <link>` to download a file from a direct link first,
 `--years 2019 2023` to write only some years.
 
-As soon as any full data is present (a year folder or a `Jawe` station
-list), the app uses it instead of the sample. If the setup is incomplete,
-it shows an error rather than switching back to the sample.
+#### Demo mode
+
+`sample_data/` is a small extract (stations 9033 AD Seligenstadt, 9040 AK
+Nürnberg and 9093 AK Deggendorf, March to June 2023, 0.33 MB). The app
+uses it only when no full data is present at all (no year folders and no
+`Jawe` station list), and then shows a "Demo sample" notice. Since the
+full data is included, a normal clone uses the full data.
 
 To rebuild the sample from the full data: `python scripts/make_sample.py`.
 To write a report of the installed data (coverage, checks, quality flags):
@@ -174,8 +206,8 @@ $env:A3_YEARS="all"; streamlit run app.py            (Windows PowerShell)
 
 `all` uses every year folder present.
 
-**If 2019 is missing** (as in the data currently available, see
-Limitations), the app shows a notice, continues with 2023 only, and marks
+**If 2019 is missing** (as in the data included, see "Adding 2019"), the
+app shows a notice, continues with 2023 only, and marks
 every station without 2023 counts as "(no traffic data)" in the station
 list and grey on the map. With the current files that is 19 stations with
 data and 27 without, out of 46 A3 stations in Bavaria.
@@ -194,18 +226,17 @@ shown as a warning with details; the app keeps working. With the current
 ### Where the data comes from
 
 All traffic and station data comes from the **Bundesanstalt für
-Straßenwesen (BASt)**:
+Straßenwesen (BASt), automatische Dauerzählstellen**, licensed under the
+Datenlizenz Deutschland – Namensnennung – Version 2.0
+(<https://www.govdata.de/dl-de/by-2-0>):
 
 - **Hourly traffic counts** (`zst*.csv`, one per station per year):
   [BASt — Stundenwerte](https://open.bydata.de/datasets?locale=de&query=Autobahn+Z%C3%A4hlstellen+A3&page=1&limit=10)
-- **Station coordinates and metadata** (`Jawe2022.csv`):
+- **Station coordinates and metadata** (`Jawe2022.csv`, `Jawe2023.csv`):
   [BASt — Jahresdaten](https://www.bast.de/DE/Themen/Digitales/HF_1/Massnahmen/verkehrszaehlung/Daten/2022_1/Jawe2022.html?nn=414410)
 
-Both are free to download, no account needed. The licence terms for
-redistributing the files have not been confirmed. The full data is
-therefore not in this repository (`.gitignore` excludes the year folders,
-`raw_data/`, the `Jawe` files and zips); only the small `sample_data/`
-extract is included.
+Both are free to download, no account needed. What was changed in the
+included copies is listed in [DATA_LICENSE.md](DATA_LICENSE.md).
 
 ### Data layout
 
@@ -213,17 +244,18 @@ extract is included.
 a3-roadwork-scheduler/
 ├── app.py
 ├── data_utils.py
+├── scheduler.py
 ├── station_names.csv       (station number -> name, for repairing names)
 ├── prophet_results.json    (precomputed seasonal values)
-├── sample_data/            (demo extract, included)
-│   ├── Jawe2023.csv
-│   └── 2023/zst9033_2023.csv, zst9040_2023.csv, zst9093_2023.csv
-├── raw_data/               (your downloads; not in git)
-├── Jawe2023.csv            (station list; not in git)
-├── 2018/  2022/            (present but not used by default; not in git)
-└── 2023/                   (not in git)
-    ├── zst9010_2023.csv
-    └── ...                 (one file per station)
+├── DATA_LICENSE.md         (source, licence, changes)
+├── Jawe2023.csv            (station list, 46 Bavarian A3 stations; in git)
+├── 2018/  2022/            (in git; not used by default)
+├── 2023/                   (in git)
+│   ├── zst9010_2023.csv
+│   └── ...                 (one file per station)
+├── 2019/                   (add yourself, see "Adding 2019"; not in git)
+├── raw_data/               (your downloads for rebuilding; not in git)
+└── sample_data/            (demo extract; in git)
 ```
 
 Paths are relative to the project folder, so the app can be started from
@@ -440,7 +472,9 @@ of monthly values written into `app.py`.
 | `station_names.csv` | Station number -> correct name, used to repair damaged names |
 | `sample_data/` | Small extract of the real data for a quick demo |
 | `tests/` | Unit tests (`python -m unittest discover -s tests -v`) |
-| `Jawe*.csv`, `2018/`, `2019/`, `2022/`, `2023/`, `raw_data/` | BASt data, not in git, see "Full data" |
+| `2018/`, `2022/`, `2023/`, `Jawe2023.csv` | BASt data (in git), see "Data" and `DATA_LICENSE.md` |
+| `DATA_LICENSE.md` | Data source, licence and the changes made to the files |
+| `2019/`, `raw_data/` | Added by you; not in git |
 
 ---
 
@@ -461,9 +495,14 @@ packages. The tests against real data are `scripts/backtest.py` and
 
 ## Credits
 
-- **Data:** Bundesanstalt für Straßenwesen (BASt), automatic traffic
-  counts on federal motorways (hourly values) and yearly evaluation files
-  (Jawe). `sample_data/` is an unchanged extract of these files.
+- **Data:** Bundesanstalt für Straßenwesen (BASt), automatische
+  Dauerzählstellen: hourly values 2018, 2022 and 2023 and the yearly
+  evaluation file Jawe2023. Licence: Datenlizenz Deutschland –
+  Namensnennung – Version 2.0, <https://www.govdata.de/dl-de/by-2-0>.
+  The files were reorganised (unzipped, renamed, Bavarian A3 only) and
+  the station names in Jawe2023 were repaired; details in
+  [DATA_LICENSE.md](DATA_LICENSE.md). This project is not affiliated with
+  or endorsed by BASt.
 - **aitraffic** ([github.com/DanieMyl/aitraffic](https://github.com/DanieMyl/aitraffic)),
   a joint project, provided:
   - the 2018, 2022 and 2023 hourly files and `Jawe2023.csv` used to test
