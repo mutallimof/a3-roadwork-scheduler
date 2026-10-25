@@ -15,21 +15,22 @@ afterwards.
 ## What the app shows
 
 You choose a counting station, the affected side of the road, the earliest
-start date, the project duration in weeks and the daily working hours. The
-app then shows:
+start date, the project duration in weeks, the daily working hours and the
+length of one work session. The app then shows:
 
-- **The recommended time**: a weekday, a time window and a calendar date
-  range, with a short note on how it was chosen.
-- **Key numbers**: average traffic in the recommended hour, how much lower
-  that is than the worst slot inside your working hours, and a rough CO2
-  estimate.
+- **The recommended time**: a weekday, a time window of the chosen length
+  and a calendar date range, with a short note on how it was chosen, and
+  the Bavarian public holidays in that period.
+- **Key numbers**: average traffic in the recommended window, how much
+  lower that is than the worst window inside your working hours, and a
+  rough CO2 estimate.
 - **Seasonal alternative** (projects longer than 6 weeks): the month with the
   lowest value in the precomputed seasonal data, an alternative date range in
   that month, and a bar chart of all 12 monthly values.
 - **Weekly traffic pattern**: a heatmap of measured average vehicles per hour
   for each weekday and hour at the selected station, with the recommended
-  slot marked.
-- **Top 5 time slots** and an explanation of the score.
+  window marked, and the same by month and weekday.
+- **Top 5 windows** and an explanation of the score.
 - **A3 network map**: all counting stations coloured by average traffic.
 - **Weather** (projects of 1-2 weeks starting within about 15 days): a
   short-term forecast from Open-Meteo. It is shown for information only and
@@ -269,28 +270,69 @@ names (`Fernziel_Ri1`/`Fernziel_Ri2`) come from `Jawe2022.csv`, or
 cleaning steps, including a corrected mistake in parsing the coordinates,
 are in `analysis.ipynb`.
 
-### Choosing the time slot
+### Choosing the time window
 
-For the selected station and side of the road, the app averages the
-historical counts for every (weekday, hour) combination inside the chosen
-working hours, and scores each one:
+The logic is in `scheduler.py`.
+
+1. For the selected station and side of the road, the app averages the
+   measured counts for each weekday and clock hour (168 slots). Bavarian
+   public holidays and hours BASt flagged as implausible are left out.
+2. Every block of N consecutive hours (N = "Hours per work session") that
+   lies completely inside the working hours is a candidate. Blocks may
+   cross midnight (night shift 22:00–06:00).
+3. Each block is scored on its averages:
 
 ```
-traffic_score = 1 - (avg_traffic / highest avg_traffic among those slots)
+traffic_score = 1 - (avg_traffic / highest avg_traffic among the blocks)
 truck_score   = 1 - avg_truck_share
 score         = traffic_score * truck_score
 ```
 
-The slot with the highest score is recommended. The start date is the first
-matching weekday after the earliest start date, and the work repeats weekly
-for the chosen number of weeks.
+4. The block with the highest score is recommended. The project starts on
+   the first matching weekday on or after the earliest start date and
+   repeats weekly for the chosen number of weeks.
+
+Working hours are clock times with the end excluded: day = 06:00–18:00
+(12 hours), night = 22:00–06:00 (8 hours).
+
+**Hour convention.** BASt's `Stunde` n covers (n−1):00 to n:00 local time,
+so Stunde 1 is 00:00–01:00. Evidence: on the spring daylight-saving day,
+Stunde 3 (02:00–03:00, the hour that does not exist) is 0 at every station
+in 2018, 2022 and 2023, and in autumn it holds about twice the usual
+count. The BASt data-set description defines "Stunde 01 = 0.00–1.00 Uhr".
+All times in the app use this convention. Before this branch the app
+showed every hour one hour late.
 
 ### CO2 estimate
 
 Assumes every vehicle passing during the work is forced into a 2 km detour
 at 120 g CO2/km, i.e. 0.24 kg CO2 per vehicle. The app compares the best
-slot with the worst slot inside the working hours. This is a rough
-illustration, not a measured value.
+window with the worst window inside the working hours, for one session per
+week (weeks × session hours). This is a rough illustration, not a measured
+value.
+
+### Accuracy (held-out weeks)
+
+`python scripts/backtest.py` tests the logic on 7 weeks of July–December
+2023, using only data from before each week. Results on the real 2023 data
+(`docs/backtest_v2.md`):
+
+- Expected traffic: the weekly averages are off by 21% per hour on average
+  (MAE 243 vehicles/hour per direction).
+- Choice: the recommended window was the measured quietest, or within the
+  top 3, in 68% (1-hour windows, any time) to 99% (4-hour day shift) of
+  133 tests per case; on average its traffic was 0–16% above the quietest
+  window of that week.
+
+### Comparison with aitraffic
+
+`docs/comparison.md` compares this app with the aitraffic project on the
+same data, with 12 test cases checked against measured counts, and
+explains each difference. Summary: aitraffic's LightGBM forecast is more
+accurate when the week before the planned work has been measured (13.5%
+vs 22.8% error), but without recent data it fails (71.6% error), which is
+the normal case when planning months ahead. Its hour convention, shift
+handling and whole-window scoring were adopted here.
 
 ### Seasonal values (Prophet)
 
@@ -345,12 +387,10 @@ of monthly values written into `app.py`.
 - **The app only uses the lowest month.** The seasonal suggestion picks the
   month with the lowest value. It does not check whether the difference to
   other months is meaningful.
-- **No accuracy has been measured.** Neither the time-slot recommendation
-  nor the Prophet values have been tested against held-out data. As a
-  plausibility check only: with the 2023 data the network-wide quietest
-  slot is Sunday hour 4–5 (about 500 vehicles/hour, both directions) and
-  the busiest Friday hour 15 (about 5,870), close to the notebook's
-  figures for 2019 + 2023 (550 and 5,660).
+- **Accuracy.** The time-window choice and the expected traffic are
+  tested on held-out weeks (see "Accuracy" above); the Prophet seasonal
+  values are not. The expected traffic is a weekly average and does not
+  follow the season (about 21% error per hour).
 - **Two years of data with a gap.** The analysis uses 2019 and 2023
   (2020–2022 were left out because of COVID). Prophet fits one trend across
   the four-year gap. Each public holiday appears only twice in the training
@@ -359,17 +399,15 @@ of monthly values written into `app.py`.
   The others use the fixed fallback values in `app.py`; where those values
   came from is not documented in the code. Not every station has traffic
   files for every year.
-- **Hour labels.** BASt's `Stunde` column runs from 1 to 24. The app shows
-  the value as a clock time (e.g. 5 → 05:00). If `Stunde` = 1 means
-  00:00–01:00 (which the 1–24 range suggests), the times shown are one hour
-  later than the hour that was counted. The aitraffic project's data report
-  also reads `Stunde` 1 as 00:00–01:00, but neither source has been checked
-  against the BASt documentation.
-- **Time window vs. score.** The score is computed for single hours. The
-  app then shows a 4-hour window starting at the best hour, which can extend
-  beyond the chosen working hours. The CO2 estimate assumes 8 working hours
-  per day for both "Day" and "Night" options, although the day option
-  covers 06–18.
+- **Hour convention to confirm.** The app reads BASt Stunde 1 as
+  00:00–01:00 (see "Hour convention"). The evidence in the data is clear,
+  but the current BASt data-set description could not be opened from the
+  test environment; please confirm.
+- **Public holidays.** Only holidays valid in all of Bavaria are used.
+  15 August (Mariä Himmelfahrt) is a holiday only in some communities and
+  is treated as a normal day; in the comparison its effect was visible at
+  station 9085. Holidays are listed for the project period but are not
+  recommended as work days.
 - **Short projects assume a repeating weekly pattern.** The app repeats the
   best weekly slot and does not check whether traffic stays low across the
   whole project period.
@@ -385,6 +423,7 @@ of monthly values written into `app.py`.
 | File | Purpose |
 |---|---|
 | `app.py` | The Streamlit application |
+| `scheduler.py` | Recommendation logic: windows, shifts, hour convention, holidays |
 | `data_utils.py` | Loads and cleans traffic and coordinate data, finds year folders |
 | `refresh_forecasts.py` | Standalone script that regenerates `prophet_results.json` |
 | `analysis.ipynb` | Exploratory analysis with the reasoning behind data decisions |
@@ -393,6 +432,9 @@ of monthly values written into `app.py`.
 | `scripts/fetch_data.py` | Unzips downloaded BASt files and puts A3 data into the folders the app expects |
 | `scripts/make_sample.py` | Builds `sample_data/` from the full data |
 | `scripts/data_report.py` | Writes `data_report.md` (coverage, checks, quality flags) |
+| `scripts/backtest.py` | Accuracy on held-out weeks (`--version v1` for the old logic) |
+| `scripts/compare_with_aitraffic.py` | Same test cases through this app and aitraffic, checked against measured counts |
+| `docs/` | Comparison report and backtest results |
 | `data_report.md` | Report of the data used for testing (aggregate figures only) |
 | `station_names.csv` | Station number -> correct name, used to repair damaged names |
 | `sample_data/` | Small extract of the real data for a quick demo |
@@ -407,9 +449,12 @@ of monthly values written into `app.py`.
 python -m unittest discover -s tests -v
 ```
 
-18 tests for the data loader, year selection, name repair, data checks and
-`scripts/fetch_data.py`. They use small generated files in a temporary
-folder, not real data, and need no extra packages.
+29 tests for the data loader, year selection, name repair, data checks,
+`scripts/fetch_data.py` and the recommendation logic (`scheduler.py`:
+hour convention, shifts, windows across midnight, start date, holidays).
+They use small generated files, not real data, and need no extra
+packages. The tests against real data are `scripts/backtest.py` and
+`scripts/compare_with_aitraffic.py` (they need the full data).
 
 ---
 
@@ -429,6 +474,14 @@ folder, not real data, and need no extra packages.
   - the idea of a written data report (`data_report.md`), adapted in
     `scripts/data_report.py`;
   - the month × weekday heatmap (`plot_month_dow()` in `heatmap.py`),
-    adapted in the app as "Measured traffic by month and weekday".
+    adapted in the app as "Measured traffic by month and weekday";
+  - the BASt hour convention (`parse_timestamp()` in `clean_data.py`),
+    scoring whole windows (`_find_continuous_windows()` in
+    `recommend_windows.py`), shifts across midnight (`ShiftDuration`),
+    leaving out implausible hours (`load_data()` in `forecast_lgbm.py`)
+    and Bavarian public holidays (its `is_holiday` feature), adapted in
+    `scheduler.py`;
+  - the idea of testing on held-out data (`evaluate()` in
+    `forecast_lgbm.py`), adapted in `scripts/backtest.py`.
 
   No code was copied unchanged; each part was rewritten for this app.
