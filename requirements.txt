@@ -1,0 +1,7 @@
+streamlit>=1.66
+streamlit-folium>=0.27
+pandas
+matplotlib
+pyproj
+folium
+requests

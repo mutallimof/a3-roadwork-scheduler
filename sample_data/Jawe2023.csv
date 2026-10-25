@@ -1,0 +1,47 @@
+DZ_Nr;DZ_Name;Land_Nr;Str_Kl;Str_Nr;Koor_UTM32_E;Koor_UTM32_N;Fernziel_Ri1;Fernziel_Ri2
+9033;AD Seligenstadt (O);9;A;3;502.145;5.537.327;Frankfurt a. Main;Würzburg
+9011;AD Würzburg-West (O);9;A;3;560.331;5.511.095;Frankfurt a. Main;Würzburg
+9034;AD Würzburg-West (W);9;A;3;557.220;5.511.239;Frankfurt a. Main;Würzburg
+9046;AK Altdorf (S);9;A;3;667.277;5.474.252;Nürnberg;Passau
+9038;AK Biebelried (O);9;A;3;583.447;5.515.534;Würzburg;Nürnberg
+9036;AK Biebelried (W);9;A;3;577.705;5.514.094;Würzburg;Nürnberg
+9093;AK Deggendorf (W);9;A;3;788.427;5.415.109;Nürnberg;Passau
+9050;AK Fürth/Erlangen (O);9;A;3;646.332;5.489.582;Würzburg;Nürnberg
+9951;AK Fürth/Erlangen (W);9;A;3;643.408;5.491.613;Würzburg;Nürnberg
+9040;AK Nürnberg (O);9;A;3;663.447;5.480.389;Nürnberg;Passau
+9039;AK Nürnberg (W);9;A;3;660.699;5.481.653;Nürnberg;Passau
+9080;AK Regensburg (O);9;A;3;724.965;5.431.022;Nürnberg;Passau
+9074;AK Regensburg (W);9;A;3;721.651;5.431.395;Nürnberg;Passau
+9505;AS Aschaffenburg (W);9;A;3;504.321;5.537.530;Frankfurt a. Main;Würzburg
+9508;AS Bessenbach-Waldaschaff;9;A;3;518.739;5.536.881;Frankfurt a. Main;Würzburg
+9519;AS Erlangen-Tennenlohe;9;A;3;649.440;5.488.130;Würzburg;Passau
+9518;AS Erlangen-West;9;A;3;639.614;5.493.367;Würzburg;Nürnberg
+9515;AS Geiselwind;9;A;3;612.121;5.513.235;Würzburg;Nürnberg
+9507;AS Goldbach;9;A;3;515.690;5.538.979;Frankfurt a. Main;Würzburg
+9517;AS Höchstadt-Ost;9;A;3;635.847;5.503.323;Würzburg;Nürnberg
+9510;AS Marktheidenfeld;9;A;3;541.893;5.517.416;Frankfurt a. Main;Würzburg
+9520;AS Nürnberg-Nord;9;A;3;655.594;5.484.514;Würzburg;Passau
+9521;AS Nürnberg/Behringersd.;9;A;3;657.854;5.482.572;Würzburg;Passau
+9624;AS Oberölsbach;9;A;3;676.916;5.469.726;Nürnberg;Passau
+9516;AS Schlüsselfeld;9;A;3;624.397;5.510.198;Würzburg;Nürnberg
+9511;AS Wertheim/Lengfurt;9;A;3;551.470;5.513.722;Frankfurt a. Main;Würzburg
+9513;AS Würzburg-Heidingsfeld;9;A;3;569.887;5.510.355;Frankfurt a. Main;Nürnberg
+9506;AS-Aschaffenburg;9;A;3;511.470;5.537.681;Frankfurt a. Main;Würzburg
+9512;AS-Würzburg-Randersacker;9;A;3;576.234;5.512.738;Frankfurt a. Main;Nürnberg
+9628;Aicha vorm Wald;9;A;3;812.938;5.399.842;Nürnberg;Passau
+9041;Geiselwind (W);9;A;3;606.065;5.514.115;Würzburg;Nürnberg
+9727;Goldbach (W);9;A;3;513.271;5.537.974;Frankfurt a. Main;Würzburg
+9010;Hösbach (O);9;A;3;516.421;5.538.900;Frankfurt a. Main;Würzburg
+9027;Kitzingen/Schwarzach (O);9;A;3;590.856;5.515.091;Würzburg;Nürnberg
+9051;Neumarkt/Opf. (S);9;A;3;680.230;5.465.451;Nürnberg;Passau
+9081;Nittendorf (W);9;A;3;714.561;5.435.573;Nürnberg;Passau
+9085;Pocking (O);9;A;3;825.904;5.372.116;Passau;Linz (A)
+9252;Pommersfelden (O);9;A;3;631.716;5.509.420;Würzburg;Nürnberg
+9251;Pommersfelden (W);9;A;3;630.162;5.510.806;Würzburg;Nürnberg
+9076;Regensburg-Ost (O);9;A;3;731.936;5.432.370;Nürnberg;Passau
+9009;Regensburg-Ost (W);9;A;3;730.052;5.431.921;Nürnberg;Passau
+9991;Rohrbrunn (O);9;A;3;528.125;5.527.434;Frankfurt a. Main;Würzburg
+9077;Rosenhof (W);9;A;3;735.917;5.431.647;Nürnberg;Passau
+9627;Schlüsselfeld;9;A;3;614.170;5.513.133;Würzburg;Nürnberg
+9509;Weibersbrunn;9;A;3;525.126;5.531.238;Frankfurt a. Main;Würzburg
+9159;Würzburg-Kist;9;A;3;564.010;5.511.123;Frankfurt a. Main;Nürnberg
