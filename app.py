@@ -4,7 +4,8 @@ from streamlit_folium import st_folium
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
-from data_utils import load_traffic_data, load_coordinates, resolve_data_dir, BASE_DIR
+from data_utils import (load_traffic_data, load_coordinates, resolve_data_dir, year_status,
+                        check_data, BASE_DIR)
 import datetime
 import json
 import os
@@ -17,8 +18,8 @@ st.write("Suggests when to schedule roadworks at a counting station on the A3 mo
          "based on historical hourly traffic counts from BASt.")
 
 SETUP_HINT = ("See the README section \"Full data\": run `python scripts/fetch_data.py` to put the "
-              "year folders (for example `2019/`, `2023/`) and `Jawe2022.csv` "
-              f"in the project folder (`{BASE_DIR}`).")
+              "year folders (for example `2019/`, `2023/`) and the station list (`Jawe2022.csv` or "
+              f"`Jawe2023.csv`) in the project folder (`{BASE_DIR}`).")
 
 data_dir, is_sample = resolve_data_dir()
 
@@ -27,6 +28,14 @@ def load_data(data_dir):
     df = load_traffic_data(base_path=data_dir)
     coords = load_coordinates(base_path=data_dir)
     return df, coords
+
+@st.cache_data
+def run_data_check(df):
+    # The check must never stop the app; a failure is reported as a finding
+    try:
+        return check_data(df)
+    except Exception as e:
+        return [f"The data check itself failed ({type(e).__name__}: {e})."], pd.DataFrame()
 
 @st.cache_data
 def load_prophet_results():
@@ -71,8 +80,12 @@ except Exception as e:
     st.stop()
 
 if coords.empty:
-    st.error(f"`Jawe2022.csv` was loaded but contains no A3 stations. {SETUP_HINT}")
+    st.error(f"The station list `{coords.attrs.get('source_file', 'Jawe')}` was loaded but contains no "
+             f"A3 stations in Bavaria. {SETUP_HINT}")
     st.stop()
+
+years_info = year_status(data_dir)
+check_issues, check_table = run_data_check(df)
 
 days_map = {1:'Mon', 2:'Tue', 3:'Wed', 4:'Thu', 5:'Fri', 6:'Sat', 7:'Sun'}
 day_names_full = {'Mon':'Monday', 'Tue':'Tuesday', 'Wed':'Wednesday', 'Thu':'Thursday',
@@ -88,9 +101,27 @@ if is_sample:
                f"extract in `sample_data/`: {len(stations_with_data)} stations, {data_period}. "
                f"The numbers are real BASt counts but cover only part of the year, so results are "
                f"for demonstration only. Run `python scripts/fetch_data.py` for the full data.")
+stations_without_data = coords[~coords['DZ_Nr'].isin(stations_with_data)]
+if years_info['missing'] and not is_sample:
+    st.info(f"Configured years: {', '.join(str(y) for y in years_info['configured'])}. "
+            f"No data folder for {', '.join(str(y) for y in years_info['missing'])}, so the app uses "
+            f"{', '.join(str(y) for y in years_info['used'])} only. {len(stations_without_data)} of "
+            f"{len(coords)} stations have no traffic data for the years in use; they are marked "
+            f"\"no traffic data\" in the station list and grey on the map.")
+ignored_note = (f" Also present but not used: {', '.join(str(y) for y in years_info['ignored'])} "
+                f"(set A3_YEARS to include them)." if years_info['ignored'] and not is_sample else "")
 st.caption(f"Data loaded: {len(df):,} hourly records from {len(stations_with_data)} stations, "
            f"years {', '.join(str(y) for y in years_loaded)}. "
-           f"{len(prophet_results)} stations have a precomputed seasonal forecast.")
+           f"{len(prophet_results)} stations have a precomputed seasonal forecast.{ignored_note}")
+if check_issues:
+    st.warning(f"Data check: {len(check_issues)} finding(s). The app still works; results for the "
+               f"affected stations may be less reliable.")
+    with st.expander("Data check details"):
+        for issue in check_issues:
+            st.markdown(f"- {issue}")
+        st.caption("Checked on load: hours per station and year, duplicate and missing hours, empty, negative "
+                   "and impossible counts (over 10,000 vehicles per hour in one direction), more trucks than "
+                   "vehicles, and BASt quality flags ('s' = estimated, 'u' = implausible).")
 
 # --- Inputs -----------------------------------------------------------------
 with st.container(border=True):
@@ -101,9 +132,14 @@ with st.container(border=True):
         if is_sample:
             # The sample only has counts for a few stations; list just those
             station_choices = coords[coords['DZ_Nr'].isin(stations_with_data)]
-        station_name = st.selectbox("Counting station", sorted(station_choices['DZ_Name'].dropna().unique()))
-        station_row = coords[coords['DZ_Name']==station_name].iloc[0]
-        station_id = station_row['DZ_Nr']
+        # Stations with data first, then the rest, each sorted by name
+        station_choices = station_choices.assign(has_data=station_choices['DZ_Nr'].isin(stations_with_data))
+        station_choices = station_choices.sort_values(['has_data', 'DZ_Name'], ascending=[False, True])
+        station_labels = {row.DZ_Nr: row.DZ_Name if row.has_data else f"{row.DZ_Name} (no traffic data)"
+                          for row in station_choices.itertuples()}
+        station_id = st.selectbox("Counting station", list(station_labels), format_func=station_labels.get)
+        station_row = coords[coords['DZ_Nr'] == station_id].iloc[0]
+        station_name = station_row['DZ_Name']
         dir1_label = f"→ {station_row['Fernziel_Ri1']}" if pd.notna(station_row['Fernziel_Ri1']) else "Direction 1"
         dir2_label = f"→ {station_row['Fernziel_Ri2']}" if pd.notna(station_row['Fernziel_Ri2']) else "Direction 2"
         direction_choice = st.radio(
@@ -111,8 +147,8 @@ with st.container(border=True):
             ["Both directions (full closure)", dir1_label, dir2_label],
         )
         if station_id not in stations_with_data:
-            st.warning("No traffic counts are loaded for this station, so no schedule can be computed. "
-                       "Stations with data are listed in the table under \"About the data\".")
+            st.warning("No traffic counts are loaded for this station for the years in use, so no schedule "
+                       "can be computed. Stations with data are at the top of the list.")
     with right:
         st.markdown("**When**")
         earliest_start = st.date_input("Earliest possible start date", value=datetime.date.today())
@@ -326,6 +362,30 @@ def show_results():
                "over all loaded years. Darker means more traffic. The orange box marks the recommended slot. "
                "The chart covers all 24 hours; the recommendation only considers your working hours.")
 
+    # Month x weekday view of the measured counts. Idea adapted from
+    # plot_month_dow() in heatmap.py of the aitraffic project
+    # (github.com/DanieMyl/aitraffic).
+    with st.expander("Measured traffic by month and weekday"):
+        month_pivot = (station_data[hour_mask]
+                       .assign(month=station_data['Datum'].dt.month)
+                       .groupby(['Wotag', 'month'])['effective_traffic'].mean().unstack())
+        fig, ax = plt.subplots(figsize=(12, 3.5))
+        im = ax.imshow(month_pivot.values, aspect='auto', cmap='Blues')
+        ax.set_yticks(range(len(month_pivot.index)))
+        ax.set_yticklabels([days_map.get(d, d) for d in month_pivot.index])
+        ax.set_xticks(range(len(month_pivot.columns)))
+        ax.set_xticklabels([month_names[m][:3] for m in month_pivot.columns])
+        ax.set_xlabel("Month")
+        ax.set_ylabel("Day of week")
+        ax.set_title(f"{station_name} — {direction_choice}, {work_hours}", fontsize=10)
+        plt.colorbar(im, label='Average vehicles per hour')
+        fig.tight_layout()
+        st.pyplot(fig)
+        plt.close(fig)
+        st.caption("What this chart shows: measured historical traffic within your working hours, averaged "
+                   f"per month and weekday ({data_period}). Unlike the seasonal chart above, these are counts, "
+                   "not model values. Months without data are left blank.")
+
     st.subheader("Top 5 time slots")
     st.dataframe(
         top5[['day_name','Stunde','avg_traffic','avg_truck_ratio','final_score']]
@@ -426,11 +486,25 @@ if st.session_state.show_results:
             st.code(f"{type(e).__name__}: {e}")
 
 with st.expander("About the data"):
-    coverage = coords[['DZ_Nr', 'DZ_Name']].copy()
+    coverage = coords[['DZ_Nr', 'DZ_Name', 'name_status']].copy()
     coverage['Traffic data loaded'] = coverage['DZ_Nr'].isin(stations_with_data).map({True: 'yes', False: 'no'})
     coverage['Station forecast'] = coverage['DZ_Nr'].astype(int).astype(str).isin(prophet_results.keys()).map({True: 'yes', False: 'no (fallback)'})
+    if not check_table.empty:
+        quality = (check_table.groupby('station')
+                   .agg(estimated=('estimated_share', 'mean'), implausible=('implausible_flags', 'sum'))
+                   .reset_index())
+        coverage = coverage.merge(quality, left_on='DZ_Nr', right_on='station', how='left').drop(columns='station')
+        coverage['estimated'] = coverage['estimated'].map(lambda v: '' if pd.isna(v) else f"{v:.0%}")
+        coverage['implausible'] = coverage['implausible'].map(lambda v: '' if pd.isna(v) else f"{int(v):,}")
+    coverage['name_status'] = coverage['name_status'].map(
+        {'ok': '', 'repaired': 'repaired', 'damaged': 'damaged in source'})
     st.write(f"Hourly traffic counts: BASt (Bundesanstalt für Straßenwesen), years "
-             f"{', '.join(str(y) for y in years_loaded)}. Station locations and direction names: BASt `Jawe2022.csv`. "
-             f"{len(stations_with_data & set(coords['DZ_Nr']))} of {len(coords)} A3 stations have traffic data loaded.")
-    st.dataframe(coverage.rename(columns={'DZ_Nr': 'Station ID', 'DZ_Name': 'Station'}),
+             f"{', '.join(str(y) for y in years_loaded)}. Station locations and direction names: BASt "
+             f"`{coords.attrs.get('source_file', 'Jawe')}`, A3 in Bavaria only. "
+             f"{len(stations_with_data & set(coords['DZ_Nr']))} of {len(coords)} stations have traffic data loaded.")
+    st.caption("\"estimated\": share of hourly counts BASt marked as estimated ('s'). \"implausible\": counts "
+               "marked implausible ('u'). \"Name\": 'repaired' means umlauts lost in the source file were "
+               "restored from the Jawe2022 names in analysis.ipynb (checked letter by letter).")
+    st.dataframe(coverage.rename(columns={'DZ_Nr': 'Station ID', 'DZ_Name': 'Station', 'name_status': 'Name',
+                                          'estimated': 'Estimated', 'implausible': 'Implausible'}),
                  width='stretch', hide_index=True)
