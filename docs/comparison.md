@@ -106,7 +106,9 @@ Jawe2023, a demo sample, one-command data setup, configurable years.
 |---|---:|---:|---:|
 | Window inside the shift and the search week | 6 / 12 | 12 / 12 | 12 / 12 |
 | Measured quietest window chosen (rank 1) | 1 / 12 | 9 / 12 | 6 / 12 |
-| Same window as aitraffic | 0 / 12 | 7 / 12 | — |
+| Same window as aitraffic | 1 / 12 | 8 / 12 | — |
+| Better than aitraffic by measured traffic | 1 / 12 | 3 / 12 | — |
+| Worse than aitraffic by measured traffic (outside shift/week counted as worse) | 10 / 12 | 1 / 12 | — |
 
 Backtest on 7 held-out weeks × 19 stations, 133 tests per case
 (`docs/backtest_v1.md` → `docs/backtest_v2.md`):
