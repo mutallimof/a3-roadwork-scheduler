@@ -87,49 +87,52 @@ pip install -r requirements.txt
 
 #### Quick demo (no downloads)
 
-If the full data is not installed, the app automatically uses the small
-extract in `sample_data/` (a few A3 stations, a few months of 2023) and
-shows a "Demo sample" notice at the top. Results from the sample are for
-demonstration only: it covers part of one year, and only the stations in
-the sample can be selected.
+The repository includes `sample_data/`: a small extract of the real BASt
+data (stations 9033 AD Seligenstadt, 9040 AK Nürnberg and 9093 AK
+Deggendorf, March to June 2023, 0.33 MB). If the full data is not
+installed, the app uses it automatically and shows a "Demo sample" notice
+at the top. Results from the sample are for demonstration only: it covers
+four months of one year, and only these three stations can be selected.
 
-> **Not in the repository yet.** `sample_data/` has to be created from the
-> full data with `python scripts/make_sample.py` (see below), and the BASt
-> licence terms have to be checked before it is committed.
+Nothing to do: go to step 3.
 
 #### Full data (run scripts/fetch_data.py)
 
-1. Download the BASt files manually (the BASt pages are browser pages, and
-   the script does not guess file URLs):
-   - Hourly counts ("Stundenwerte") for **2019** and **2023**: per-station
-     zip/CSV files for the A3 stations, or the full-year file. Links are in
-     "Where the data comes from" below.
-   - `Jawe2022.csv` (station coordinates and direction names).
-2. Put the downloaded files, zipped or not, into a folder called `raw_data/`
-   in the project folder.
+1. Get the BASt files (see "Where the data comes from" below):
+   - hourly counts ("Stundenwerte") per station and year, as zips or CSVs,
+     or the large full-year file;
+   - the station list `Jawe2022.csv` (or `Jawe2023.csv`).
+2. Put them into `raw_data/` in the project folder. Zipped or not, in
+   subfolders or not, does not matter.
 3. Run:
    ```
    python scripts/fetch_data.py
    ```
-   It unzips the files, keeps only A3 stations, and writes
-   `2019/zst<station>_2019.csv`, `2023/zst<station>_2023.csv` and
-   `Jawe2022.csv` into the project folder. Files that already exist are
-   skipped, so it can be run again after adding more downloads. It prints
-   an error for files it cannot read and lists anything still missing.
-   Options: `--source-dir <folder>` to read from another folder (e.g. your
-   Downloads folder), `--url <link>` to download a file from a direct link
-   first, `--force` to rewrite existing files.
 
-As soon as any full data is present (a year folder or `Jawe2022.csv`), the
-app uses it instead of the sample. If the setup is incomplete, it shows an
-error rather than switching back to the sample.
+This builds the clean layout in one command:
 
-To rebuild the sample from the full data:
-```
-python scripts/make_sample.py
-```
-Defaults: the 3 stations with the most 2023 rows, March to June, only the
-columns the app uses. See `--help` for options.
+- unzips everything and searches subfolders;
+- keeps only A3 rows and writes one file per station and year,
+  `<year>/zst<station>_<year>.csv`, for every year found;
+- copies the station list under its own name (`Jawe2022.csv` or
+  `Jawe2023.csv`);
+- skips a station-year that appears twice and says whether the two
+  copies were identical;
+- skips files that already exist (use `--force` to rewrite them);
+- checks every output file (Latin-1, `;` separated, same columns) and
+  prints the number of stations per year.
+
+Other options: `--source-dir <folder>` to read from another folder (e.g.
+Downloads), `--url <link>` to download a file from a direct link first,
+`--years 2019 2023` to write only some years.
+
+As soon as any full data is present (a year folder or a `Jawe` station
+list), the app uses it instead of the sample. If the setup is incomplete,
+it shows an error rather than switching back to the sample.
+
+To rebuild the sample from the full data: `python scripts/make_sample.py`.
+To write a report of the installed data (coverage, checks, quality flags):
+`python scripts/data_report.py` (writes `data_report.md`).
 
 ### 3. Start
 
@@ -143,69 +146,97 @@ browser.
 The map and the weather outlook need an internet connection (map tiles and
 the map library are loaded from the internet). Everything else works offline.
 
-**How these steps were checked:** a fresh clone, Linux, Python 3.13,
-streamlit 1.66, pandas 3.0. The real BASt files were not available in the
-test environment, so the app and the two scripts were run against generated
-files in the same format as the BASt files (same columns, separators and
-encoding). This tested that the code runs; it did not test any results. The
-Windows commands were not tested.
+**How this was checked:** Linux, Python 3.13, streamlit 1.66, pandas 3.0,
+with the real BASt files for 2018, 2022 and 2023 and `Jawe2023.csv` (from
+the aitraffic project, see Credits). `fetch_data.py` rebuilt all 63
+station-year files; the app ran for every station with no errors, both with
+the full data and with only the demo sample. The map could not be checked
+(no internet access in the test environment), and the Windows commands were
+not tested.
+
+### Which years the app uses
+
+The analysis uses **2019 and 2023** (2019 as the pre-COVID baseline;
+2020–2022 were left out on purpose because of COVID, and 2022 also had poor
+station coverage). The app loads only these years by default, even if other
+year folders such as `2018/` or `2022/` are present, and says so at the top
+of the page.
+
+To use other years, set the environment variable `A3_YEARS` before
+starting the app:
+
+```
+A3_YEARS=2018,2022,2023 streamlit run app.py      # Linux/macOS
+set A3_YEARS=2018,2022,2023 && streamlit run app.py   (Windows cmd)
+$env:A3_YEARS="all"; streamlit run app.py            (Windows PowerShell)
+```
+
+`all` uses every year folder present.
+
+**If 2019 is missing** (as in the data currently available, see
+Limitations), the app shows a notice, continues with 2023 only, and marks
+every station without 2023 counts as "(no traffic data)" in the station
+list and grey on the map. With the current files that is 19 stations with
+data and 27 without, out of 46 A3 stations in Bavaria.
+
+### Data checks
+
+When the app loads the data it checks, per station and year: the number
+of hours (8,760, or 8,784 in a leap year), duplicate and missing hours,
+empty and negative counts, more than 10,000 vehicles per hour in one
+direction, more trucks than vehicles, and the BASt quality flags
+(`K_KFZ_R1`/`K_KFZ_R2`: `s` = estimated, `u` = implausible). Findings are
+shown as a warning with details; the app keeps working. With the current
+2023 data the only finding is station 9050 (AK Fürth/Erlangen (O)), with
+1,486 counts flagged implausible.
 
 ### Where the data comes from
 
-All traffic and station data comes from BASt:
+All traffic and station data comes from the **Bundesanstalt für
+Straßenwesen (BASt)**:
 
-- **Hourly traffic counts** (the `zst*.csv` files, one per station per
-  year): [BASt — Stundenwerte](https://open.bydata.de/datasets?locale=de&query=Autobahn+Z%C3%A4hlstellen+A3&page=1&limit=10)
-- **Station coordinates and metadata** (`Jawe2022.csv`): [BASt — Jahresdaten](https://www.bast.de/DE/Themen/Digitales/HF_1/Massnahmen/verkehrszaehlung/Daten/2022_1/Jawe2022.html?nn=414410)
+- **Hourly traffic counts** (`zst*.csv`, one per station per year):
+  [BASt — Stundenwerte](https://open.bydata.de/datasets?locale=de&query=Autobahn+Z%C3%A4hlstellen+A3&page=1&limit=10)
+- **Station coordinates and metadata** (`Jawe2022.csv`):
+  [BASt — Jahresdaten](https://www.bast.de/DE/Themen/Digitales/HF_1/Massnahmen/verkehrszaehlung/Daten/2022_1/Jawe2022.html?nn=414410)
 
 Both are free to download, no account needed. The licence terms for
-redistributing the files have not been confirmed yet; check the BASt pages
-before publishing copies of the data.
+redistributing the files have not been confirmed. The full data is
+therefore not in this repository (`.gitignore` excludes the year folders,
+`raw_data/`, the `Jawe` files and zips); only the small `sample_data/`
+extract is included.
 
-The steps below are the manual alternative to `scripts/fetch_data.py`:
-
-1. Download the hourly data for a year (e.g. 2019) from the Stundenwerte
-   page. It comes as a `.zip` file.
-2. Unzip it. Inside is one CSV per station, named like `zst9010_2019.csv`.
-3. In the project folder, create a folder named exactly after the year,
-   e.g. `2019`.
-4. Move all CSVs for that year into that folder.
-5. Repeat for other years (the original analysis uses 2019 and 2023).
-6. Download `Jawe2022.csv` and put it directly in the project folder (not
-   inside a year folder).
-
-The folder should then look like:
+### Data layout
 
 ```
 a3-roadwork-scheduler/
 ├── app.py
 ├── data_utils.py
-├── refresh_forecasts.py
-├── requirements.txt
-├── scripts/
-├── sample_data/            (small demo extract, used if the rest is missing)
-├── Jawe2022.csv            (station coordinates + metadata)
-├── prophet_results.json    (precomputed seasonal values, included)
-├── 2019/
-│   ├── zst9010_2019.csv
-│   └── ...
-└── 2023/
+├── station_names.csv       (station number -> name, for repairing names)
+├── prophet_results.json    (precomputed seasonal values)
+├── sample_data/            (demo extract, included)
+│   ├── Jawe2023.csv
+│   └── 2023/zst9033_2023.csv, zst9040_2023.csv, zst9093_2023.csv
+├── raw_data/               (your downloads; not in git)
+├── Jawe2023.csv            (station list; not in git)
+├── 2018/  2022/            (present but not used by default; not in git)
+└── 2023/                   (not in git)
     ├── zst9010_2023.csv
-    └── ...
+    └── ...                 (one file per station)
 ```
 
-`data_utils.py` loads every folder in the project folder whose name is
-exactly 4 digits and contains CSV files. Paths are relative to the project
-folder, so the app can be started from any directory.
+Paths are relative to the project folder, so the app can be started from
+any directory.
 
 ---
 
 ## Adding new yearly data
 
-### 1. Historical data — automatic
+### 1. Historical data
 
-Add the new year folder as described above. It is picked up the next time
-the app starts. To exclude a year, remove its folder.
+Put the new files into `raw_data/` and run `python scripts/fetch_data.py`.
+The app only uses the years in `A3_YEARS` (default 2019 and 2023), so add
+the new year there, or change `DEFAULT_YEARS` in `data_utils.py`.
 
 ### 2. Seasonal values — manual refresh
 
@@ -217,8 +248,8 @@ pip install prophet
 python refresh_forecasts.py
 ```
 
-This rewrites `prophet_results.json` from the year folders currently
-present. Restart the app afterwards.
+This rewrites `prophet_results.json` from the configured years that are
+present (with the current data: 2023 only). Restart the app afterwards.
 
 The script includes German national public holidays for 2019–2026. For
 later years, extend the `GERMAN_HOLIDAYS` list at the top of
@@ -233,7 +264,8 @@ later years, extend the `GERMAN_HOLIDAYS` list at the top of
 Each row of a BASt hourly file has vehicle counts per direction
 (`KFZ_R1`/`KFZ_R2`), truck counts (`Lkw_R1`/`Lkw_R2`), the date, the weekday
 and the hour (`Stunde`, values 1–24). Station coordinates and direction
-names (`Fernziel_Ri1`/`Fernziel_Ri2`) come from `Jawe2022.csv`. The data
+names (`Fernziel_Ri1`/`Fernziel_Ri2`) come from `Jawe2022.csv`, or
+`Jawe2023.csv` when that is the only station list available. The data
 cleaning steps, including a corrected mistake in parsing the coordinates,
 are in `analysis.ipynb`.
 
@@ -273,6 +305,29 @@ of monthly values written into `app.py`.
 
 ## Limitations
 
+- **No 2019 data.** The 2019 hourly files are not available in this
+  setup, so the app currently runs on 2023 only (19 stations). The 13
+  stations that only had 2019 data in the original analysis (9027, 9038,
+  9041, 9046, 9251, 9252, 9511, 9512, 9515, 9516, 9517, 9518, 9727) have no
+  traffic data now. Adding the 2019 files to `raw_data/` and rerunning
+  `fetch_data.py` restores the intended setup.
+- **No Jawe2022.csv.** The station list used is `Jawe2023.csv`. For the 45
+  stations listed in both, the coordinates are the same (checked against
+  the Jawe2022 output in `analysis.ipynb`); 9509 Weibersbrunn is new in 2023.
+- **Station names were damaged in the available Jawe2023.csv.** Every
+  umlaut had been replaced by an unknown-character mark, and this cannot be
+  undone by re-decoding. 16 of the 46 Bavarian station names were repaired
+  from `station_names.csv` (the Jawe2022 names printed in
+  `analysis.ipynb`), and only where the station number matches and every
+  other letter is identical. The destination names (Nürnberg, Würzburg)
+  were repaired the same way. A name that cannot be checked like this is
+  shown with `?` and its station number, never guessed; with the current
+  files there are none.
+- **Quality flags.** For several 2023 stations a large share of hourly
+  counts is marked as estimated by BASt (up to 41% for 9085). The app
+  reports this but still uses all counts. The meaning of the flags (`s`
+  estimated, `u` implausible) is taken from the aitraffic project's data
+  report and has not been checked against the BASt documentation.
 - **The seasonal values in the committed `prophet_results.json` mix fitted
   and forecast values.** Up to this branch, `refresh_forecasts.py` called
   `make_future_dataframe(periods=8760, freq='h')`, which by default also
@@ -291,7 +346,11 @@ of monthly values written into `app.py`.
   month with the lowest value. It does not check whether the difference to
   other months is meaningful.
 - **No accuracy has been measured.** Neither the time-slot recommendation
-  nor the Prophet values have been tested against held-out data.
+  nor the Prophet values have been tested against held-out data. As a
+  plausibility check only: with the 2023 data the network-wide quietest
+  slot is Sunday hour 4–5 (about 500 vehicles/hour, both directions) and
+  the busiest Friday hour 15 (about 5,870), close to the notebook's
+  figures for 2019 + 2023 (550 and 5,660).
 - **Two years of data with a gap.** The analysis uses 2019 and 2023
   (2020–2022 were left out because of COVID). Prophet fits one trend across
   the four-year gap. Each public holiday appears only twice in the training
@@ -303,8 +362,9 @@ of monthly values written into `app.py`.
 - **Hour labels.** BASt's `Stunde` column runs from 1 to 24. The app shows
   the value as a clock time (e.g. 5 → 05:00). If `Stunde` = 1 means
   00:00–01:00 (which the 1–24 range suggests), the times shown are one hour
-  later than the hour that was counted. This has not been checked against
-  the BASt documentation.
+  later than the hour that was counted. The aitraffic project's data report
+  also reads `Stunde` 1 as 00:00–01:00, but neither source has been checked
+  against the BASt documentation.
 - **Time window vs. score.** The score is computed for single hours. The
   app then shows a 4-hour window starting at the best hour, which can extend
   beyond the chosen working hours. The CO2 estimate assumes 8 working hours
@@ -332,5 +392,43 @@ of monthly values written into `app.py`.
 | `requirements.txt` | Python packages needed to run the app |
 | `scripts/fetch_data.py` | Unzips downloaded BASt files and puts A3 data into the folders the app expects |
 | `scripts/make_sample.py` | Builds `sample_data/` from the full data |
-| `sample_data/` | Small extract of the real data for a quick demo (not committed yet) |
-| `Jawe2022.csv`, `2019/`, `2023/` | BASt data, not included, see "Full data" |
+| `scripts/data_report.py` | Writes `data_report.md` (coverage, checks, quality flags) |
+| `data_report.md` | Report of the data used for testing (aggregate figures only) |
+| `station_names.csv` | Station number -> correct name, used to repair damaged names |
+| `sample_data/` | Small extract of the real data for a quick demo |
+| `tests/` | Unit tests (`python -m unittest discover -s tests -v`) |
+| `Jawe*.csv`, `2018/`, `2019/`, `2022/`, `2023/`, `raw_data/` | BASt data, not in git, see "Full data" |
+
+---
+
+## Tests
+
+```
+python -m unittest discover -s tests -v
+```
+
+18 tests for the data loader, year selection, name repair, data checks and
+`scripts/fetch_data.py`. They use small generated files in a temporary
+folder, not real data, and need no extra packages.
+
+---
+
+## Credits
+
+- **Data:** Bundesanstalt für Straßenwesen (BASt), automatic traffic
+  counts on federal motorways (hourly values) and yearly evaluation files
+  (Jawe). `sample_data/` is an unchanged extract of these files.
+- **aitraffic** ([github.com/DanieMyl/aitraffic](https://github.com/DanieMyl/aitraffic)),
+  a joint project, provided:
+  - the 2018, 2022 and 2023 hourly files and `Jawe2023.csv` used to test
+    this version;
+  - the idea of using the BASt quality flags and of checking for missing
+    hours, negative counts and more trucks than vehicles
+    (`clean_data.py`, `data_report.md`), adapted in `check_data()` in
+    `data_utils.py`;
+  - the idea of a written data report (`data_report.md`), adapted in
+    `scripts/data_report.py`;
+  - the month × weekday heatmap (`plot_month_dow()` in `heatmap.py`),
+    adapted in the app as "Measured traffic by month and weekday".
+
+  No code was copied unchanged; each part was rewritten for this app.
