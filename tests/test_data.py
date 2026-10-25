@@ -122,6 +122,12 @@ class NameRepairTest(unittest.TestCase):
         self.assertEqual(du.repair_name(f'W{D}rzburg', None, {'Würzburg', 'Nürnberg'}), ('Würzburg', 'repaired'))
         self.assertEqual(du.repair_name(f'M{D}hle', None, {'Mühle', 'Möhle'})[1], 'damaged')
 
+    def test_compound_words_are_matched_by_part(self):
+        known = du.known_words_from({9521: 'AS Nürnberg/Behringersd.'})
+        self.assertEqual(du.repair_name(f'AS N{D}rnberg/Behringersdorf (B14)', None, known),
+                         ('AS Nürnberg/Behringersdorf (B14)', 'repaired'))
+        self.assertEqual(du.repair_name(f'AS N{D}rnberg-M{D}geldorf', None, known)[1], 'damaged')
+
     def test_intact_name_is_unchanged(self):
         self.assertEqual(du.repair_name('AD Seligenstadt (O)', 'other'), ('AD Seligenstadt (O)', 'ok'))
 
@@ -261,6 +267,22 @@ class FetchDataTest(unittest.TestCase):
         code, out = self.run_fetch()                             # second run: nothing rewritten
         self.assertEqual(code, 0, out)
         self.assertIn('already present', out)
+
+    def test_station_list_is_reduced_to_bavarian_a3_and_repaired(self):
+        rows = [['9040', f'AK N{D}rnberg (O)', '9', 'A', '3', '649.440', '5.488.130', f'N{D}rnberg', 'Passau'],
+                ['5672', 'AD Heumar (N)', '5', 'A', '3', '362.914', '5.644.366', 'Oberhausen', 'Köln'],
+                ['7001', 'A7 Station', '9', 'A', '7', '560.100', '5.500.000', 'a', 'b']]
+        with open(os.path.join(self.raw, 'Jawe2023.csv'), 'w', encoding='utf-8') as f:
+            f.write(JAWE_HEADER + ''.join(';'.join(r) + '\n' for r in rows))
+        hourly_frame(9040, 2023).to_csv(os.path.join(self.raw, 'zst9040_2023.csv'), sep=';', index=False,
+                                        encoding='latin-1')
+        code, out = self.run_fetch()
+        self.assertEqual(code, 0, out)
+        written = pd.read_csv(os.path.join(self.project, 'Jawe2023.csv'), sep=';', encoding='latin-1', dtype=str)
+        self.assertEqual(written['DZ_Nr'].tolist(), ['9040'])
+        self.assertEqual(written['DZ_Name'].tolist(), ['AK Nürnberg (O)'])
+        self.assertEqual(written['Fernziel_Ri1'].tolist(), ['Nürnberg'])
+        self.assertIn('1 of 3 rows', out)
 
     def test_empty_source_folder_fails_with_instructions(self):
         code, out = self.run_fetch()

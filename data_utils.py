@@ -211,6 +211,14 @@ def load_reference_names(path=STATION_NAMES_FILE):
     return dict(zip(ref['DZ_Nr'].astype(int), ref['DZ_Name']))
 
 
+def known_words_from(reference):
+    """Words (split on spaces, '/' and '-') of the reference names and destinations."""
+    words = set(KNOWN_PLACE_NAMES)
+    for name in list(reference.values()) + list(KNOWN_PLACE_NAMES):
+        words.update(w for w in re.split(r'[ /-]', name) if w)
+    return words
+
+
 def _matches_damaged(damaged, candidate):
     # Same length; every intact character equal; every damaged character
     # stands for a non-ASCII character (umlauts, ß) in the candidate.
@@ -230,13 +238,15 @@ def repair_name(text, reference=None, known_words=()):
         return text, 'ok'
     if reference and _matches_damaged(text, reference):
         return reference, 'repaired'
-    words = text.split(' ')
-    for i, word in enumerate(words):
-        if DAMAGED in word:
-            fits = {w for w in known_words if _matches_damaged(word, w)}
+    # Split on spaces, '/' and '-' and keep the separators, so parts of
+    # compound names (e.g. 'N?rnberg/Behringersdorf') can be matched
+    parts = re.split(r'([ /-])', text)
+    for i, part in enumerate(parts):
+        if DAMAGED in part:
+            fits = {w for w in known_words if _matches_damaged(part, w)}
             if len(fits) == 1:
-                words[i] = fits.pop()
-    repaired = ' '.join(words)
+                parts[i] = fits.pop()
+    repaired = ''.join(parts)
     if DAMAGED in repaired:
         return repaired, 'damaged'
     return repaired, 'repaired'
@@ -264,9 +274,7 @@ def load_coordinates(base_path=BASE_DIR):
     coords['DZ_Nr'] = coords['DZ_Nr'].astype(int)
 
     reference = load_reference_names()
-    known_words = set(KNOWN_PLACE_NAMES)
-    for name in reference.values():
-        known_words.update(name.split(' '))
+    known_words = known_words_from(reference)
     names = [repair_name(n, reference.get(nr), known_words) for nr, n in zip(coords['DZ_Nr'], coords['DZ_Name'])]
     coords['DZ_Name'] = [n for n, _ in names]
     coords['name_status'] = [s for _, s in names]

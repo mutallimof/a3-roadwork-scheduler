@@ -14,7 +14,10 @@ What it accepts in raw_data/ (subfolders are searched too):
   - .zip files and .csv files with BASt hourly counts ("Stundenwerte").
     Per-station files (e.g. zst9033_2019.csv) and large files with many
     stations both work. Only A3 rows (Strklas = A, Strnum = 3) are kept.
-  - Jawe<year>.csv (or a zip containing it), copied under its own name.
+  - Jawe<year>.csv (or a zip containing it), written under its own name,
+    reduced to the A3 in Bavaria (Land_Nr 9), with damaged station and
+    destination names repaired (see data_utils.repair_name). All columns
+    are kept; the file is written as Latin-1 like the other BASt files.
 
 Rules:
   - Every year found in the files is written, unless --years is given. Which
@@ -45,6 +48,8 @@ import zipfile
 import pandas as pd
 
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, PROJECT_DIR)
+import data_utils  # noqa: E402
 DEFAULT_SOURCE_DIR = os.path.join(PROJECT_DIR, 'raw_data')
 
 # Columns the app needs from an hourly file (the rest are kept as they are)
@@ -122,15 +127,62 @@ def read_header(opener):
     return [c.strip() for c in first.strip().split(';')]
 
 
+def clean_station_list(raw_bytes):
+    """
+    Bavarian A3 rows of a Jawe station list, with repaired names.
+    Returns (DataFrame, counts) where counts reports rows and name repairs.
+    """
+    try:
+        text = raw_bytes.decode('utf-8')
+    except UnicodeDecodeError:
+        text = raw_bytes.decode('latin-1')
+    df = pd.read_csv(io.StringIO(text), sep=';', dtype=str, keep_default_na=False)
+    df.columns = [c.strip() for c in df.columns]
+    rows_in = len(df)
+    df = df[(df['Str_Kl'].str.strip() == 'A') & (df['Str_Nr'].str.strip() == '3')]
+    if 'Land_Nr' in df.columns:
+        df = df[df['Land_Nr'].str.strip() == data_utils.BAVARIA_LAND_NR]
+    reference = data_utils.load_reference_names()
+    known = data_utils.known_words_from(reference)
+    statuses = []
+    names = []
+    for nr, name in zip(df['DZ_Nr'], df['DZ_Name']):
+        fixed, status = data_utils.repair_name(name.strip(), reference.get(int(nr)), known)
+        names.append(fixed)
+        statuses.append(status)
+    df = df.assign(DZ_Name=names)
+    # Other text columns (destinations, nearest junctions, remarks): word by
+    # word, only where exactly one known word fits
+    other_damaged = 0
+    for col in df.columns:
+        if col == 'DZ_Name':
+            continue
+        values = []
+        for v in df[col]:
+            if data_utils.DAMAGED in v:
+                v, status = data_utils.repair_name(v.strip(), None, known)
+                other_damaged += status == 'damaged'
+            values.append(v)
+        df[col] = values
+    counts = {'rows_in': rows_in, 'rows_out': len(df),
+              'repaired': statuses.count('repaired'), 'damaged': statuses.count('damaged'),
+              'other_damaged': other_damaged}
+    return df, counts
+
+
 def handle_jawe(label, opener, force):
     name = os.path.basename(label)
     target = os.path.join(PROJECT_DIR, name[0].upper() + name[1:].lower())
     if os.path.exists(target) and not force:
         log(f"  skip {label}: {os.path.basename(target)} already present")
         return
-    with opener() as src, open(target, 'wb') as dst:
-        shutil.copyfileobj(src, dst)
-    log(f"  wrote {os.path.basename(target)} (from {label})")
+    with opener() as src:
+        df, counts = clean_station_list(src.read())
+    # A name that could not be repaired keeps U+FFFD, which Latin-1 writes as '?'
+    df.to_csv(target, sep=';', index=False, encoding='latin-1', errors='replace')
+    log(f"  wrote {os.path.basename(target)} (from {label}): {counts['rows_out']} of {counts['rows_in']} rows "
+        f"(A3 in Bavaria), {counts['repaired']} station names repaired, {counts['damaged']} still damaged; "
+        f"{counts['other_damaged']} other values still contain a damaged letter (written as '?')")
 
 
 class HourlyWriter:
