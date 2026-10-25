@@ -3,18 +3,20 @@ __pycache__/
 .venv/
 venv/
 
-# Full BASt data: not committed (licence for redistribution not confirmed).
-# Rebuild it with scripts/fetch_data.py from files in raw_data/.
-# Patterns are anchored to the project root, so sample_data/ and
-# prophet_results.json are not affected.
-/2018/
-/2019/
-/2022/
-/2023/
+# BASt data. The rebuilt layout for 2018, 2022 and 2023 and the cleaned
+# station list are tracked (Datenlizenz Deutschland – Namensnennung 2.0,
+# see DATA_LICENSE.md). Raw downloads, zips and any other year or station
+# list stay out of git. To track a year you add later (e.g. 2019), add a
+# line "!/2019/" below.
 /[0-9][0-9][0-9][0-9]/
+!/2018/
+!/2022/
+!/2023/
 /raw_data/
 /Jawe*.csv
+!/Jawe2023.csv
 /*.csv
+!/Jawe2023.csv
 *.zip
 # Small reference file that belongs to the code (station number -> name)
 !/station_names.csv
