@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 from data_utils import (load_traffic_data, load_coordinates, resolve_data_dir, year_status,
                         check_data, BASE_DIR)
+import scheduler
 import datetime
 import json
 import os
@@ -87,9 +88,6 @@ if coords.empty:
 years_info = year_status(data_dir)
 check_issues, check_table = run_data_check(df, full_year=not is_sample)
 
-days_map = {1:'Mon', 2:'Tue', 3:'Wed', 4:'Thu', 5:'Fri', 6:'Sat', 7:'Sun'}
-day_names_full = {'Mon':'Monday', 'Tue':'Tuesday', 'Wed':'Wednesday', 'Thu':'Thursday',
-                  'Fri':'Friday', 'Sat':'Saturday', 'Sun':'Sunday'}
 month_names = {1:'January',2:'February',3:'March',4:'April',5:'May',6:'June',
                7:'July',8:'August',9:'September',10:'October',11:'November',12:'December'}
 
@@ -156,8 +154,12 @@ with st.container(border=True):
         work_hours = st.select_slider("Daily working hours",
                                         options=["Night only (22-06)", "Day (06-18)", "24h (always)"],
                                         value="Day (06-18)")
+        shift_length = len(scheduler.SHIFTS[scheduler.SHIFT_BY_LABEL[work_hours]][1])
+        window_hours = st.slider("Hours per work session", 1, min(12, shift_length), min(4, shift_length),
+                                 help="Length of one uninterrupted work session. The app looks for the quietest "
+                                      "block of this many consecutive hours inside the working hours.")
 
-    current_inputs = (station_id, duration_weeks, work_hours, direction_choice, earliest_start)
+    current_inputs = (station_id, duration_weeks, work_hours, window_hours, direction_choice, earliest_start)
     find_clicked = st.button("Find best schedule", type="primary")
 
 if "show_results" not in st.session_state:
@@ -171,6 +173,7 @@ if find_clicked:
     st.session_state.station_lon = station_row['lon']
     st.session_state.duration_weeks = duration_weeks
     st.session_state.work_hours = work_hours
+    st.session_state.window_hours = window_hours
     st.session_state.direction_choice = direction_choice
     st.session_state.dir1_label = dir1_label
     st.session_state.dir2_label = dir2_label
@@ -183,6 +186,7 @@ def show_results():
     station_name = st.session_state.station_name
     duration_weeks = st.session_state.duration_weeks
     work_hours = st.session_state.work_hours
+    window_hours = st.session_state.window_hours
     direction_choice = st.session_state.direction_choice
     dir1_label = st.session_state.dir1_label
     dir2_label = st.session_state.dir2_label
@@ -195,86 +199,62 @@ def show_results():
                  "Pick a different station.")
         return
 
-    if direction_choice == dir1_label:
-        station_data['effective_traffic'] = station_data['KFZ_R1']
-        station_data['effective_trucks'] = station_data['Lkw_R1']
-    elif direction_choice == dir2_label:
-        station_data['effective_traffic'] = station_data['KFZ_R2']
-        station_data['effective_trucks'] = station_data['Lkw_R2']
-    else:
-        station_data['effective_traffic'] = station_data['total_traffic']
-        station_data['effective_trucks'] = station_data['total_trucks']
-
-    station_data['effective_truck_ratio'] = station_data['effective_trucks'] / station_data['effective_traffic']
-
-    if work_hours == "Night only (22-06)":
-        hour_mask = (station_data['Stunde'] >= 22) | (station_data['Stunde'] <= 6)
-    elif work_hours == "Day (06-18)":
-        hour_mask = (station_data['Stunde'] >= 6) & (station_data['Stunde'] <= 18)
-    else:
-        hour_mask = pd.Series([True]*len(station_data), index=station_data.index)
-
-    relevant = station_data[hour_mask]
-
-    hourly_scores = relevant.groupby(['Wotag','Stunde']).agg(
-        avg_traffic=('effective_traffic','mean'),
-        avg_truck_ratio=('effective_truck_ratio','mean')
-    ).reset_index()
-    hourly_scores['day_name'] = hourly_scores['Wotag'].map(days_map)
-    hourly_scores['score'] = 1 - (hourly_scores['avg_traffic'] / hourly_scores['avg_traffic'].max())
-    hourly_scores['final_score'] = hourly_scores['score'] * (1 - hourly_scores['avg_truck_ratio'])
-    hourly_scores = hourly_scores.dropna(subset=['final_score'])
-
-    if hourly_scores.empty:
+    side = 'R1' if direction_choice == dir1_label else 'R2' if direction_choice == dir2_label else 'both'
+    shift = scheduler.SHIFT_BY_LABEL[work_hours]
+    rec = scheduler.recommend(station_data, side, shift, window_hours, earliest_start, duration_weeks)
+    if rec is None:
         st.error("There is not enough usable traffic data for this station and these working hours "
                  "to compute a schedule.")
         return
 
-    top5 = hourly_scores.sort_values('final_score', ascending=False).head(5)
-    worst = hourly_scores.sort_values('final_score').iloc[0]
-    best = hourly_scores.sort_values('final_score', ascending=False).iloc[0]
-    reduction = (1 - best['avg_traffic']/worst['avg_traffic']) * 100
+    best, worst, windows = rec['best'], rec['worst'], rec['windows']
+    reduction = rec['reduction'] * 100
+    start_date, end_date = rec['start_date'], rec['end_date']
+    best_dow = int(best['dow'])
+    best_day_full = scheduler.DAY_NAMES[best_dow]
+    window_text = rec['label'].split(', ', 1)[1]
 
-    total_hours = duration_weeks * 7 * (8 if work_hours != "24h (always)" else 24)
+    # One work session per week, as the headline says
+    total_hours = duration_weeks * window_hours
     co2_best = best['avg_traffic'] * 0.24 * total_hours
     co2_worst = worst['avg_traffic'] * 0.24 * total_hours
-
-    target_weekday = int(best['Wotag']) - 1
-    days_ahead = (target_weekday - earliest_start.weekday()) % 7
-    if days_ahead == 0:
-        days_ahead = 7
-    start_date = earliest_start + datetime.timedelta(days=days_ahead)
-    end_date = start_date + datetime.timedelta(weeks=duration_weeks)
-
-    best_hour = int(best['Stunde'])
-    best_day_full = day_names_full[best['day_name']]
-    window_label = f"{best_hour:02d}:00–{(best_hour + 4) % 24:02d}:00"
 
     # --- Headline -------------------------------------------------------
     with st.container(border=True):
         st.markdown("#### Recommended time for the roadworks")
-        st.markdown(f"## {best_day_full}s, {window_label}, from {start_date.strftime('%d %B %Y')} "
+        st.markdown(f"## {rec['label']}, from {start_date.strftime('%d %B %Y')} "
                     f"to {end_date.strftime('%d %B %Y')}")
         st.write(f"Station: **{station_name}**. Affected side: **{direction_choice}**. "
-                 f"Working hours: **{work_hours}**. The work slot repeats every week until the project ends.")
+                 f"Working hours: **{work_hours}**, sessions of **{window_hours} h**. "
+                 f"The work session repeats every week until the project ends.")
         st.caption(
-            f"How this was chosen: every weekday-and-hour slot inside your working hours was scored using the "
-            f"historical counts for this station ({data_period}"
-            f"{', demo sample only' if is_sample else ''}). "
-            f"Slots with less traffic on the affected side and a lower share of trucks score higher; "
-            f"{best_day_full} at {best_hour:02d}:00 scored highest. "
-            f"The start date is the first {best_day_full} after your earliest start date."
+            f"How this was chosen: every block of {window_hours} consecutive hours inside your working hours "
+            f"was scored using the historical counts for this station ({data_period}"
+            f"{', demo sample only' if is_sample else ''}). Blocks with less traffic on the affected side and "
+            f"a lower share of trucks score higher; {best_day_full} {window_text} scored highest. The project "
+            f"starts on the first {best_day_full} on or after your earliest start date. Times are local clock "
+            f"times (BASt hour 1 = 00:00–01:00). Public holidays and hours BASt marked implausible are left "
+            f"out of the averages ({rec['excluded']['holiday']:,} and {rec['excluded']['implausible']:,} hours)."
         )
 
     c1, c2, c3 = st.columns(3)
-    c1.metric("Average traffic in the recommended hour", f"{best['avg_traffic']:.0f} vehicles/hour")
-    c2.metric("Less traffic than the worst slot", f"{reduction:.0f}%",
-              help=f"Compared with the lowest-scoring slot inside your working hours "
-                   f"({day_names_full[worst['day_name']]} {int(worst['Stunde']):02d}:00, "
+    c1.metric("Average traffic in the recommended window", f"{best['avg_traffic']:.0f} vehicles/hour")
+    c2.metric("Less traffic than the worst window", f"{reduction:.0f}%",
+              help=f"Compared with the lowest-scoring {window_hours}-hour window inside your working hours "
+                   f"({scheduler.window_label(int(worst['dow']), int(worst['clock']), window_hours)}, "
                    f"{worst['avg_traffic']:.0f} vehicles/hour).")
     c3.metric("Estimated CO2 avoided over the project", f"{(co2_worst-co2_best)/1000:.1f} t",
-              help="Rough estimate: assumes each affected vehicle drives a 2 km detour at 120 g CO2/km "
-                   "(0.24 kg per vehicle), compared with working in the worst slot.")
+              help=f"Rough estimate for {total_hours} work hours ({duration_weeks} weekly sessions of "
+                   f"{window_hours} h): assumes each affected vehicle drives a 2 km detour at 120 g CO2/km "
+                   "(0.24 kg per vehicle), compared with working in the worst window.")
+
+    if rec['holidays']:
+        on_days = rec['holidays_on_work_days']
+        listed = ', '.join(f"{d:%d %b %Y} ({n})" for d, n in rec['holidays'])
+        st.info(f"Public holidays in Bavaria during the project: {listed}. "
+                + (f"{len(on_days)} of them fall on a work day ({best_day_full}). " if on_days else "")
+                + "Traffic on public holidays is usually lower than on normal weekdays; they are not part of "
+                  "the averages above.")
 
     if duration_weeks <= 2:
         weather = get_weather_outlook(st.session_state.station_lat, st.session_state.station_lon, start_date)
@@ -306,7 +286,7 @@ def show_results():
         if candidate < earliest_start:
             candidate = datetime.date(year + 1, best_month, 1)
 
-        days_ahead_seasonal = (target_weekday - candidate.weekday()) % 7
+        days_ahead_seasonal = (best_dow - candidate.weekday()) % 7
         seasonal_start = candidate + datetime.timedelta(days=days_ahead_seasonal)
         seasonal_end = seasonal_start + datetime.timedelta(weeks=duration_weeks)
 
@@ -339,40 +319,42 @@ def show_results():
 
     # --- Weekly pattern -------------------------------------------------
     st.subheader("Weekly traffic pattern at this station")
-    full_pivot = station_data.groupby(['Wotag','Stunde'])['effective_traffic'].mean().unstack()
+    profile = rec['profile']['avg_traffic'].to_numpy().reshape(7, 24)
     fig, ax = plt.subplots(figsize=(12, 4))
-    im = ax.imshow(full_pivot.values, aspect='auto', cmap='Blues')
-    ax.set_yticks(range(len(full_pivot.index)))
-    ax.set_yticklabels([days_map.get(d, d) for d in full_pivot.index])
-    ax.set_xticks(range(len(full_pivot.columns)))
-    ax.set_xticklabels([int(h) for h in full_pivot.columns], fontsize=8)
-    ax.set_xlabel("Hour of day (BASt 'Stunde' value)")
+    im = ax.imshow(profile, aspect='auto', cmap='Blues')
+    ax.set_yticks(range(7))
+    ax.set_yticklabels([d[:3] for d in scheduler.DAY_NAMES])
+    ax.set_xticks(range(24))
+    ax.set_xticklabels([f"{h:02d}" for h in range(24)], fontsize=8)
+    ax.set_xlabel("Hour of day (start of the hour, local time)")
     ax.set_ylabel("Day of week")
     ax.set_title(f"{station_name} — {direction_choice}", fontsize=10)
-    if best['Wotag'] in full_pivot.index and best['Stunde'] in full_pivot.columns:
-        row = list(full_pivot.index).index(best['Wotag'])
-        col = list(full_pivot.columns).index(best['Stunde'])
-        ax.add_patch(Rectangle((col - 0.5, row - 0.5), 1, 1, fill=False, edgecolor='#e8590c', linewidth=2.5))
+    for k in range(window_hours):
+        slot = (int(best['start_slot']) + k) % 168
+        ax.add_patch(Rectangle((slot % 24 - 0.5, slot // 24 - 0.5), 1, 1, fill=False,
+                               edgecolor='#e8590c', linewidth=2.5))
     plt.colorbar(im, label='Average vehicles per hour')
     fig.tight_layout()
     st.pyplot(fig)
     plt.close(fig)
     st.caption("What this chart shows: measured historical traffic, not a forecast. Each cell is the average "
                "number of vehicles per hour on the selected side of the road for that weekday and hour, "
-               "over all loaded years. Darker means more traffic. The orange box marks the recommended slot. "
-               "The chart covers all 24 hours; the recommendation only considers your working hours.")
+               "over all loaded data except public holidays. Darker means more traffic. The orange boxes mark "
+               "the recommended window. The chart covers all 24 hours; the recommendation only considers your "
+               "working hours.")
 
     # Month x weekday view of the measured counts. Idea adapted from
     # plot_month_dow() in heatmap.py of the aitraffic project
     # (github.com/DanieMyl/aitraffic).
     with st.expander("Measured traffic by month and weekday"):
-        month_pivot = (station_data[hour_mask]
-                       .assign(month=station_data['Datum'].dt.month)
-                       .groupby(['Wotag', 'month'])['effective_traffic'].mean().unstack())
+        rows, _ = scheduler.prepare(station_data, side)
+        in_shift = rows[rows['clock'].isin(scheduler.SHIFTS[shift][1])]
+        month_pivot = (in_shift.assign(month=in_shift['Datum'].dt.month)
+                       .groupby(['dow', 'month'])['traffic'].mean().unstack())
         fig, ax = plt.subplots(figsize=(12, 3.5))
         im = ax.imshow(month_pivot.values, aspect='auto', cmap='Blues')
         ax.set_yticks(range(len(month_pivot.index)))
-        ax.set_yticklabels([days_map.get(d, d) for d in month_pivot.index])
+        ax.set_yticklabels([scheduler.DAY_NAMES[d][:3] for d in month_pivot.index])
         ax.set_xticks(range(len(month_pivot.columns)))
         ax.set_xticklabels([month_names[m][:3] for m in month_pivot.columns])
         ax.set_xlabel("Month")
@@ -386,29 +368,31 @@ def show_results():
                    f"per month and weekday ({data_period}). Unlike the seasonal chart above, these are counts, "
                    "not model values. Months without data are left blank.")
 
-    st.subheader("Top 5 time slots")
+    st.subheader("Top 5 windows")
+    top5 = windows.head(5).assign(
+        Window=[scheduler.window_label(int(r.dow), int(r.clock), window_hours) for r in windows.head(5).itertuples()])
     st.dataframe(
-        top5[['day_name','Stunde','avg_traffic','avg_truck_ratio','final_score']]
-        .rename(columns={'day_name':'Day','Stunde':'Hour','avg_traffic':'Avg vehicles/hour',
-                         'avg_truck_ratio':'Truck share','final_score':'Score (0–1)'})
-        .style.format({'Hour':'{:.0f}','Avg vehicles/hour':'{:.0f}','Truck share':'{:.1%}','Score (0–1)':'{:.2f}'})
+        top5[['Window', 'avg_traffic', 'avg_truck_ratio', 'score']]
+        .rename(columns={'avg_traffic': 'Avg vehicles/hour', 'avg_truck_ratio': 'Truck share', 'score': 'Score (0–1)'})
+        .style.format({'Avg vehicles/hour': '{:.0f}', 'Truck share': '{:.1%}', 'Score (0–1)': '{:.2f}'})
         .background_gradient(subset=['Score (0–1)'], cmap='Greens'),
         width='stretch',
         hide_index=True,
     )
 
     with st.expander("How the score is calculated"):
-        st.write("Each slot gets two sub-scores, which are multiplied:")
+        st.write(f"Each {window_hours}-hour window gets two sub-scores, computed on the window's averages, "
+                 "which are multiplied:")
         st.markdown(
-            "- **Traffic score** = 1 − (average traffic in this slot ÷ highest average traffic among the slots "
-            "inside your working hours)\n"
-            "- **Truck score** = 1 − average share of trucks in this slot\n"
-            "- **Score** = traffic score × truck score. A slot only scores well if both are good."
+            "- **Traffic score** = 1 − (average traffic in this window ÷ highest average traffic among the "
+            "windows inside your working hours)\n"
+            "- **Truck score** = 1 − average share of trucks in this window\n"
+            "- **Score** = traffic score × truck score. A window only scores well if both are good."
         )
         pc1, pc2, pc3 = st.columns(3)
-        pc1.metric("Traffic score (recommended slot)", f"{best['score']:.2f}")
-        pc2.metric("Truck score (recommended slot)", f"{1-best['avg_truck_ratio']:.2f}")
-        pc3.metric("Score (recommended slot)", f"{best['final_score']:.2f}")
+        pc1.metric("Traffic score (recommended window)", f"{best['traffic_score']:.2f}")
+        pc2.metric("Truck score (recommended window)", f"{1-best['avg_truck_ratio']:.2f}")
+        pc3.metric("Score (recommended window)", f"{best['score']:.2f}")
 
     # --- Network map ----------------------------------------------------
     st.subheader("A3 network overview")
