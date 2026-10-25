@@ -83,11 +83,53 @@ source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### 2. Add the data
+### 2. Choose the data
 
-The traffic data is **not included in this repository**. Without it the app
-starts but shows an error message explaining what is missing. See
-"Setting up your data folders" below.
+#### Quick demo (no downloads)
+
+If the full data is not installed, the app automatically uses the small
+extract in `sample_data/` (a few A3 stations, a few months of 2023) and
+shows a "Demo sample" notice at the top. Results from the sample are for
+demonstration only: it covers part of one year, and only the stations in
+the sample can be selected.
+
+> **Not in the repository yet.** `sample_data/` has to be created from the
+> full data with `python scripts/make_sample.py` (see below), and the BASt
+> licence terms have to be checked before it is committed.
+
+#### Full data (run scripts/fetch_data.py)
+
+1. Download the BASt files manually (the BASt pages are browser pages, and
+   the script does not guess file URLs):
+   - Hourly counts ("Stundenwerte") for **2019** and **2023**: per-station
+     zip/CSV files for the A3 stations, or the full-year file. Links are in
+     "Where the data comes from" below.
+   - `Jawe2022.csv` (station coordinates and direction names).
+2. Put the downloaded files, zipped or not, into a folder called `raw_data/`
+   in the project folder.
+3. Run:
+   ```
+   python scripts/fetch_data.py
+   ```
+   It unzips the files, keeps only A3 stations, and writes
+   `2019/zst<station>_2019.csv`, `2023/zst<station>_2023.csv` and
+   `Jawe2022.csv` into the project folder. Files that already exist are
+   skipped, so it can be run again after adding more downloads. It prints
+   an error for files it cannot read and lists anything still missing.
+   Options: `--source-dir <folder>` to read from another folder (e.g. your
+   Downloads folder), `--url <link>` to download a file from a direct link
+   first, `--force` to rewrite existing files.
+
+As soon as any full data is present (a year folder or `Jawe2022.csv`), the
+app uses it instead of the sample. If the setup is incomplete, it shows an
+error rather than switching back to the sample.
+
+To rebuild the sample from the full data:
+```
+python scripts/make_sample.py
+```
+Defaults: the 3 stations with the most 2023 rows, March to June, only the
+columns the app uses. See `--help` for options.
 
 ### 3. Start
 
@@ -103,12 +145,12 @@ the map library are loaded from the internet). Everything else works offline.
 
 **How these steps were checked:** a fresh clone, Linux, Python 3.13,
 streamlit 1.66, pandas 3.0. The real BASt files were not available in the
-test environment, so the app was run against generated files in the same
-format as the BASt files (same columns, separators and encoding). This tested
-that the code runs; it did not test any results. The Windows activation
-command was not tested.
+test environment, so the app and the two scripts were run against generated
+files in the same format as the BASt files (same columns, separators and
+encoding). This tested that the code runs; it did not test any results. The
+Windows commands were not tested.
 
-### Setting up your data folders
+### Where the data comes from
 
 All traffic and station data comes from BASt:
 
@@ -116,7 +158,11 @@ All traffic and station data comes from BASt:
   year): [BASt — Stundenwerte](https://open.bydata.de/datasets?locale=de&query=Autobahn+Z%C3%A4hlstellen+A3&page=1&limit=10)
 - **Station coordinates and metadata** (`Jawe2022.csv`): [BASt — Jahresdaten](https://www.bast.de/DE/Themen/Digitales/HF_1/Massnahmen/verkehrszaehlung/Daten/2022_1/Jawe2022.html?nn=414410)
 
-Both are free to download, no account needed.
+Both are free to download, no account needed. The licence terms for
+redistributing the files have not been confirmed yet; check the BASt pages
+before publishing copies of the data.
+
+The steps below are the manual alternative to `scripts/fetch_data.py`:
 
 1. Download the hourly data for a year (e.g. 2019) from the Stundenwerte
    page. It comes as a `.zip` file.
@@ -136,6 +182,8 @@ a3-roadwork-scheduler/
 ├── data_utils.py
 ├── refresh_forecasts.py
 ├── requirements.txt
+├── scripts/
+├── sample_data/            (small demo extract, used if the rest is missing)
 ├── Jawe2022.csv            (station coordinates + metadata)
 ├── prophet_results.json    (precomputed seasonal values, included)
 ├── 2019/
@@ -282,4 +330,7 @@ of monthly values written into `app.py`.
 | `analysis.ipynb` | Exploratory analysis with the reasoning behind data decisions |
 | `prophet_results.json` | Precomputed monthly seasonal values per station |
 | `requirements.txt` | Python packages needed to run the app |
-| `Jawe2022.csv`, `2019/`, `2023/` | BASt data, not included, see "Setting up your data folders" |
+| `scripts/fetch_data.py` | Unzips downloaded BASt files and puts A3 data into the folders the app expects |
+| `scripts/make_sample.py` | Builds `sample_data/` from the full data |
+| `sample_data/` | Small extract of the real data for a quick demo (not committed yet) |
+| `Jawe2022.csv`, `2019/`, `2023/` | BASt data, not included, see "Full data" |
