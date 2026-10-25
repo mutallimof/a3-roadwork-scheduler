@@ -4,7 +4,7 @@ from streamlit_folium import st_folium
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
-from data_utils import load_traffic_data, load_coordinates, BASE_DIR
+from data_utils import load_traffic_data, load_coordinates, resolve_data_dir, BASE_DIR
 import datetime
 import json
 import os
@@ -16,14 +16,16 @@ st.title("A3 Roadwork Scheduler")
 st.write("Suggests when to schedule roadworks at a counting station on the A3 motorway (Bavaria), "
          "based on historical hourly traffic counts from BASt.")
 
-SETUP_HINT = ("See the README section \"Setting up your data folders\": the app needs year folders "
-              "(for example `2019/`, `2023/`) with BASt hourly CSV files, and `Jawe2022.csv`, "
+SETUP_HINT = ("See the README section \"Full data\": run `python scripts/fetch_data.py` to put the "
+              "year folders (for example `2019/`, `2023/`) and `Jawe2022.csv` "
               f"in the project folder (`{BASE_DIR}`).")
 
+data_dir, is_sample = resolve_data_dir()
+
 @st.cache_data
-def load_data():
-    df = load_traffic_data()
-    coords = load_coordinates()
+def load_data(data_dir):
+    df = load_traffic_data(base_path=data_dir)
+    coords = load_coordinates(base_path=data_dir)
     return df, coords
 
 @st.cache_data
@@ -56,7 +58,7 @@ def get_weather_outlook(lat, lon, target_date):
 
 prophet_results = load_prophet_results()
 try:
-    df, coords = load_data()
+    df, coords = load_data(data_dir)
 except FileNotFoundError as e:
     st.error(f"Traffic data not found. {SETUP_HINT}")
     with st.expander("Technical details"):
@@ -80,6 +82,12 @@ month_names = {1:'January',2:'February',3:'March',4:'April',5:'May',6:'June',
 
 years_loaded = sorted(df['year'].unique())
 stations_with_data = set(df['Zst'].unique())
+data_period = f"{df['Datum'].min():%d %b %Y} to {df['Datum'].max():%d %b %Y}"
+if is_sample:
+    st.warning(f"**Demo sample.** The full traffic data is not installed, so the app is using the small "
+               f"extract in `sample_data/`: {len(stations_with_data)} stations, {data_period}. "
+               f"The numbers are real BASt counts but cover only part of the year, so results are "
+               f"for demonstration only. Run `python scripts/fetch_data.py` for the full data.")
 st.caption(f"Data loaded: {len(df):,} hourly records from {len(stations_with_data)} stations, "
            f"years {', '.join(str(y) for y in years_loaded)}. "
            f"{len(prophet_results)} stations have a precomputed seasonal forecast.")
@@ -89,7 +97,11 @@ with st.container(border=True):
     left, right = st.columns(2, gap="large")
     with left:
         st.markdown("**Where**")
-        station_name = st.selectbox("Counting station", sorted(coords['DZ_Name'].dropna().unique()))
+        station_choices = coords
+        if is_sample:
+            # The sample only has counts for a few stations; list just those
+            station_choices = coords[coords['DZ_Nr'].isin(stations_with_data)]
+        station_name = st.selectbox("Counting station", sorted(station_choices['DZ_Name'].dropna().unique()))
         station_row = coords[coords['DZ_Name']==station_name].iloc[0]
         station_id = station_row['DZ_Nr']
         dir1_label = f"→ {station_row['Fernziel_Ri1']}" if pd.notna(station_row['Fernziel_Ri1']) else "Direction 1"
@@ -211,7 +223,8 @@ def show_results():
                  f"Working hours: **{work_hours}**. The work slot repeats every week until the project ends.")
         st.caption(
             f"How this was chosen: every weekday-and-hour slot inside your working hours was scored using the "
-            f"historical counts for this station ({', '.join(str(y) for y in years_loaded)} data). "
+            f"historical counts for this station ({data_period}"
+            f"{', demo sample only' if is_sample else ''}). "
             f"Slots with less traffic on the affected side and a lower share of trucks score higher; "
             f"{best_day_full} at {best_hour:02d}:00 scored highest. "
             f"The start date is the first {best_day_full} after your earliest start date."

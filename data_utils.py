@@ -8,6 +8,9 @@ from pyproj import Transformer
 # which directory it is started from.
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
+# Small extract of the real data, used when the full data is not present
+SAMPLE_DIR = os.path.join(BASE_DIR, 'sample_data')
+
 
 def fix_utm(value):
     # UTM coordinates use thousands-grouping in 3-digit blocks, but the last
@@ -26,6 +29,8 @@ def discover_year_folders(base_path=BASE_DIR):
     as a sorted list of (year, file_count) tuples.
     """
     year_folders = []
+    if not os.path.isdir(base_path):
+        return year_folders
     for entry in os.listdir(base_path):
         full_path = os.path.join(base_path, entry)
         # Folder name must be exactly 4 digits to be treated as a year
@@ -52,21 +57,37 @@ def load_year(year, base_path=BASE_DIR):
     return pd.concat(dfs, ignore_index=True)
 
 
-def load_traffic_data(min_stations=5):
+def resolve_data_dir(allow_sample=True):
+    """
+    Returns (data_dir, is_sample). The full data in the project folder is
+    used if any of it is present (year folders or Jawe2022.csv), so a
+    half-finished setup shows its real error instead of silently switching
+    to the sample. Otherwise sample_data/ is used if it contains data.
+    """
+    full_present = (bool(discover_year_folders(BASE_DIR))
+                    or os.path.exists(os.path.join(BASE_DIR, 'Jawe2022.csv')))
+    if full_present or not allow_sample:
+        return BASE_DIR, False
+    if discover_year_folders(SAMPLE_DIR):
+        return SAMPLE_DIR, True
+    return BASE_DIR, False
+
+
+def load_traffic_data(min_stations=5, base_path=BASE_DIR):
     """
     Loads every year folder currently present and combines them into one
     dataset. min_stations sets a threshold below which a year is flagged
     as a warning (likely incomplete data), without excluding it — that
     decision is left to whoever manages the data folders.
     """
-    available_years = discover_year_folders()
+    available_years = discover_year_folders(base_path)
 
     if not available_years:
         raise FileNotFoundError("No year folders with CSV files found. Expected folders like '2019', '2023' etc.")
 
     all_dfs = []
     for year, file_count in available_years:
-        df_year = load_year(year)
+        df_year = load_year(year, base_path)
         if df_year.empty:
             print(f"Warning: {year} folder found but no usable CSVs loaded.")
             continue
@@ -98,10 +119,10 @@ def load_traffic_data(min_stations=5):
                 'KFZ_R1', 'KFZ_R2', 'Lkw_R1', 'Lkw_R2']]
 
 
-def load_coordinates():
+def load_coordinates(base_path=BASE_DIR):
     # Loads station coordinates + metadata from the yearly-average file,
     # filters to A3 only, fixes the UTM formatting, converts to lat/lon
-    coords = pd.read_csv(os.path.join(BASE_DIR, 'Jawe2022.csv'), sep=';', encoding='latin-1')
+    coords = pd.read_csv(os.path.join(base_path, 'Jawe2022.csv'), sep=';', encoding='latin-1')
     coords = coords[['DZ_Nr', 'DZ_Name', 'Str_Kl', 'Str_Nr',
                       'Koor_UTM32_E', 'Koor_UTM32_N',
                       'Fernziel_Ri1', 'Fernziel_Ri2']]
