@@ -367,7 +367,8 @@ of monthly values written into `app.py`.
   files there are none.
 - **Quality flags.** For several 2023 stations a large share of hourly
   counts is marked as estimated by BASt (up to 41% for 9085). The app
-  reports this but still uses all counts. The meaning of the flags (`s`
+  reports this and still uses the estimated counts; only counts flagged
+  implausible are left out of the averages. The meaning of the flags (`s`
   estimated, `u` implausible) is taken from the aitraffic project's data
   report and has not been checked against the BASt documentation.
 - **The seasonal values in the committed `prophet_results.json` mix fitted
