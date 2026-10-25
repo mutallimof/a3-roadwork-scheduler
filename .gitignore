@@ -2,3 +2,11 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+
+# Full BASt data (large; get it with scripts/fetch_data.py).
+# Patterns are anchored to the project root, so sample_data/ and
+# prophet_results.json are not affected.
+/[0-9][0-9][0-9][0-9]/
+/*.csv
+/raw_data/
+*.zip
