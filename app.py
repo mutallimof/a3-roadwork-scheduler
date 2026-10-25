@@ -30,10 +30,10 @@ def load_data(data_dir):
     return df, coords
 
 @st.cache_data
-def run_data_check(df):
+def run_data_check(df, full_year):
     # The check must never stop the app; a failure is reported as a finding
     try:
-        return check_data(df)
+        return check_data(df, full_year=full_year)
     except Exception as e:
         return [f"The data check itself failed ({type(e).__name__}: {e})."], pd.DataFrame()
 
@@ -85,7 +85,7 @@ if coords.empty:
     st.stop()
 
 years_info = year_status(data_dir)
-check_issues, check_table = run_data_check(df)
+check_issues, check_table = run_data_check(df, full_year=not is_sample)
 
 days_map = {1:'Mon', 2:'Tue', 3:'Wed', 4:'Thu', 5:'Fri', 6:'Sat', 7:'Sun'}
 day_names_full = {'Mon':'Monday', 'Tue':'Tuesday', 'Wed':'Wednesday', 'Thu':'Thursday',

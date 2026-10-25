@@ -297,11 +297,14 @@ def load_coordinates(base_path=BASE_DIR):
 MAX_PLAUSIBLE_PER_DIRECTION = 10_000
 
 
-def check_data(df):
+def check_data(df, full_year=True):
     """
     Basic data checks, run when the app loads the data. Never raises.
     Returns (issues, per_station) where issues is a list of plain-text
     findings and per_station a DataFrame with one row per station-year.
+    full_year=True expects every hour of each year; with False (used for
+    the demo sample, which covers only some months) only gaps between the
+    first and last day present are counted as missing.
 
     The quality-flag part follows the analysis in the aitraffic project
     (clean_data.py / data_report.md, github.com/DanieMyl/aitraffic):
@@ -310,7 +313,10 @@ def check_data(df):
     issues = []
     rows = []
     for (zst, year), g in df.groupby(['Zst', 'year']):
-        expected = 8784 if pd.Timestamp(year=int(year), month=12, day=31).dayofyear == 366 else 8760
+        if full_year:
+            expected = 8784 if pd.Timestamp(year=int(year), month=12, day=31).dayofyear == 366 else 8760
+        else:
+            expected = ((g['Datum'].max() - g['Datum'].min()).days + 1) * 24
         slots = g[['Datum', 'Stunde']].drop_duplicates()
         duplicates = len(g) - len(slots)
         missing_hours = max(expected - len(slots), 0)
