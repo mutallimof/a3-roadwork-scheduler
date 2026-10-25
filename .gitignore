@@ -3,10 +3,18 @@ __pycache__/
 .venv/
 venv/
 
-# Full BASt data (large; get it with scripts/fetch_data.py).
+# Full BASt data: not committed (licence for redistribution not confirmed).
+# Rebuild it with scripts/fetch_data.py from files in raw_data/.
 # Patterns are anchored to the project root, so sample_data/ and
 # prophet_results.json are not affected.
+/2018/
+/2019/
+/2022/
+/2023/
 /[0-9][0-9][0-9][0-9]/
-/*.csv
 /raw_data/
+/Jawe*.csv
+/*.csv
 *.zip
+# Small reference file that belongs to the code (station number -> name)
+!/station_names.csv
