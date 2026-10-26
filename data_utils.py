@@ -358,5 +358,5 @@ def check_data(df, full_year=True):
     report('negative_values', "Hours with negative counts")
     report('trucks_above_total', "Hours with more trucks than vehicles")
     report('above_max', f"Hours above {MAX_PLAUSIBLE_PER_DIRECTION:,} vehicles in one direction")
-    report('implausible_flags', "Counts flagged implausible by BASt ('u')")
+    report('implausible_flags', "Counts marked implausible by BASt (left out of the averages)")
     return issues, per_station

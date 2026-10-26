@@ -1,34 +1,63 @@
-import streamlit as st
-import folium
-from streamlit_folium import st_folium
-import pandas as pd
-import matplotlib.pyplot as plt
-from matplotlib.patches import Rectangle
-from data_utils import (load_traffic_data, load_coordinates, resolve_data_dir, year_status,
-                        check_data, BASE_DIR)
-import scheduler
 import datetime
+import html
 import json
+import math
 import os
+
+import altair as alt
+import folium
+import pandas as pd
 import requests
+import streamlit as st
+from streamlit_folium import st_folium
 
-st.set_page_config(layout="wide", page_title="A3 Roadwork Scheduler")
+import scheduler
+from data_utils import (BASE_DIR, check_data, load_coordinates, load_traffic_data, resolve_data_dir,
+                        year_status)
 
-st.title("A3 Roadwork Scheduler")
-st.write("Suggests when to schedule roadworks at a counting station on the A3 motorway (Bavaria), "
-         "based on historical hourly traffic counts from BASt.")
+st.set_page_config(page_title="A3 Roadwork Scheduler", layout="wide")
 
-SETUP_HINT = ("See the README section \"Data\": run `python scripts/fetch_data.py` to put the "
-              "year folders (for example `2019/`, `2023/`) and the station list (`Jawe2022.csv` or "
-              f"`Jawe2023.csv`) in the project folder (`{BASE_DIR}`).")
+ACCENT = '#2563eb'
+MARK = '#d9480f'          # recommended window in charts; contrasts with the blue scale
+MUTED = '#6b7280'
+SCALE = ['#f7fafd', '#c9dcf5', '#7ea6e3', '#3a6fd0']      # light to accent, no near-black blocks
+AXIS = dict(labelFontSize=11, titleFontSize=11, labelColor='#4b5563', titleColor='#374151',
+            domainColor='#d1d5db', tickColor='#d1d5db')
 
-data_dir, is_sample = resolve_data_dir()
+st.markdown("""
+<style>
+.block-container {max-width: 1100px; padding-top: 2rem; padding-bottom: 4rem;}
+h1 {font-weight: 650; letter-spacing: -0.01em;}
+.step {font-size: 0.8rem; font-weight: 600; color: #2563eb; text-transform: uppercase; letter-spacing: 0.06em;}
+.result {border: 1px solid #dbe4f0; border-left: 5px solid #2563eb; border-radius: 12px;
+         padding: 1.25rem 1.5rem; margin: 0.5rem 0 1.25rem 0; background: #fbfcfe;}
+.result .label {color: #4b5563; font-size: 0.9rem; margin-bottom: 0.2rem;}
+.result .window {font-size: 2rem; font-weight: 650; color: #111827; line-height: 1.2;}
+.result .dates {color: #374151; margin-top: 0.3rem;}
+.facts {display: flex; flex-wrap: wrap; gap: 0.75rem 2.5rem; margin-top: 1rem;}
+.fact .value {font-size: 1.35rem; font-weight: 600; color: #111827;}
+.fact .what {color: #4b5563; font-size: 0.85rem;}
+.result .note {color: #4b5563; font-size: 0.85rem; margin-top: 0.9rem;}
+@media (max-width: 640px) {
+  .result {padding: 1rem;}
+  .result .window {font-size: 1.5rem;}
+  .fact .value {font-size: 1.15rem;}
+}
+</style>
+""", unsafe_allow_html=True)
 
+SIDE_ANY = 'both'
+SHIFT_LABELS = {'day': 'Day 06–18', 'night': 'Night 22–06', 'any': 'Any time'}
+MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+
+# --- Data ---------------------------------------------------------------------
 @st.cache_data
 def load_data(data_dir):
     df = load_traffic_data(base_path=data_dir)
     coords = load_coordinates(base_path=data_dir)
     return df, coords
+
 
 @st.cache_data
 def run_data_check(df, full_year):
@@ -38,457 +67,320 @@ def run_data_check(df, full_year):
     except Exception as e:
         return [f"The data check itself failed ({type(e).__name__}: {e})."], pd.DataFrame()
 
+
 @st.cache_data
-def load_prophet_results():
-    # Missing or unreadable forecast file is not fatal: the app falls back
-    # to a network-wide seasonal estimate.
+def load_accuracy():
     try:
-        with open(os.path.join(BASE_DIR, 'prophet_results.json')) as f:
+        with open(os.path.join(BASE_DIR, 'accuracy.json'), encoding='utf-8') as f:
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
-        return {}
+        return None
 
-def get_weather_outlook(lat, lon, target_date):
-    """Open-Meteo forecast — only reliable within ~15 days, returns None outside that range."""
-    days_ahead = (target_date - datetime.date.today()).days
-    if days_ahead < 0 or days_ahead > 15:
+
+@st.cache_data
+def recommendation(data_dir, station, side, shift, hours, earliest, weeks):
+    df, _ = load_data(data_dir)
+    return scheduler.recommend(df[df['Zst'] == station], side, shift, hours, earliest, weeks)
+
+
+def weather_outlook(lat, lon, day):
+    """Open-Meteo forecast; only reliable within about 15 days. None if unavailable."""
+    if not 0 <= (day - datetime.date.today()).days <= 15:
         return None
     try:
-        url = (f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}"
-               f"&daily=precipitation_sum,temperature_2m_max&timezone=Europe%2FBerlin"
-               f"&start_date={target_date}&end_date={target_date}")
-        r = requests.get(url, timeout=5)
+        r = requests.get("https://api.open-meteo.com/v1/forecast", timeout=5, params={
+            'latitude': lat, 'longitude': lon, 'daily': 'precipitation_sum,temperature_2m_max',
+            'timezone': 'Europe/Berlin', 'start_date': str(day), 'end_date': str(day)})
         r.raise_for_status()
-        data = r.json()
-        rain = data['daily']['precipitation_sum'][0]
-        temp = data['daily']['temperature_2m_max'][0]
-        return rain, temp
+        daily = r.json()['daily']
+        return daily['precipitation_sum'][0], daily['temperature_2m_max'][0]
     except Exception:
         return None
 
-prophet_results = load_prophet_results()
+
+def months_text(months):
+    """'Sep–Dec', 'Nov–Feb' (across the year end) or 'all months'."""
+    months = set(months)
+    if len(months) == 12:
+        return "all months"
+    first = next(m for m in range(1, 13) if ((m - 2) % 12) + 1 not in months and m in months)
+    last = first
+    while (last % 12) + 1 in months:
+        last = (last % 12) + 1
+    return MONTHS[first - 1] if first == last else f"{MONTHS[first - 1]}–{MONTHS[last - 1]}"
+
+
+def distance_km(lat1, lon1, lat2, lon2):
+    dx = (lon1 - lon2) * 111.3 * math.cos(math.radians((lat1 + lat2) / 2))
+    dy = (lat1 - lat2) * 111.3
+    return math.hypot(dx, dy)
+
+
+st.title("A3 Roadwork Scheduler")
+st.markdown("Find the quietest time for roadworks at a traffic counting station on the A3 motorway in Bavaria, "
+            "based on measured hourly traffic counts.")
+
+data_dir, is_sample = resolve_data_dir()
 try:
     df, coords = load_data(data_dir)
-except FileNotFoundError as e:
-    st.error(f"Traffic data not found. {SETUP_HINT}")
-    with st.expander("Technical details"):
-        st.code(str(e))
-    st.stop()
 except Exception as e:
-    st.error(f"The traffic data could not be loaded. {SETUP_HINT}")
+    st.error("No traffic data was found, so the app cannot make a recommendation yet. "
+             "Run `python scripts/fetch_data.py` (see the README, section \"Data\") and reload this page.")
     with st.expander("Technical details"):
         st.code(f"{type(e).__name__}: {e}")
     st.stop()
 
-if coords.empty:
-    st.error(f"The station list `{coords.attrs.get('source_file', 'Jawe')}` was loaded but contains no "
-             f"A3 stations in Bavaria. {SETUP_HINT}")
+years = year_status(data_dir)
+used_years = sorted(int(y) for y in df['year'].unique())
+stations_with_data = set(int(z) for z in df['Zst'].unique())
+check_issues, check_table = run_data_check(df, not is_sample)
+accuracy = load_accuracy()
+
+source_line = f"Data: BASt hourly counts {', '.join(map(str, used_years))}"
+if years['missing'] and not is_sample:
+    source_line += f" ({', '.join(map(str, years['missing']))} not installed)"
+source_line += f" · {len(stations_with_data)} stations with data."
+if is_sample:
+    st.info("Demo mode: only a small sample of the data is installed (3 stations, March–June 2023). "
+            "Results are for trying the app out. See the README, section \"Data\", for the full data.")
+st.caption(source_line)
+
+# --- Inputs ---------------------------------------------------------------------
+with st.expander("Advanced"):
+    show_all = st.checkbox("Also list stations without traffic data", value=False)
+    st.caption("Years used: " + ', '.join(map(str, used_years)) + ". Change them with the environment variable "
+               "A3_YEARS before starting the app (README, section \"Data\"). Times are local clock times.")
+
+choices = coords if show_all else coords[coords['DZ_Nr'].isin(stations_with_data)]
+choices = choices.assign(has_data=choices['DZ_Nr'].isin(stations_with_data))
+choices = choices.sort_values(['has_data', 'DZ_Name'], ascending=[False, True])
+labels = {int(r.DZ_Nr): r.DZ_Name if r.has_data else f"{r.DZ_Name} (no data)" for r in choices.itertuples()}
+
+c1, c2, c3 = st.columns(3, gap="large")
+with c1:
+    st.markdown('<div class="step">1 · Where</div>', unsafe_allow_html=True)
+    station_id = st.selectbox("Counting station", list(labels), format_func=labels.get)
+    station = coords[coords['DZ_Nr'] == station_id].iloc[0]
+    side_options = {SIDE_ANY: "Both directions (full closure)",
+                    'R1': f"Towards {station['Fernziel_Ri1']}" if pd.notna(station['Fernziel_Ri1']) else "Direction 1",
+                    'R2': f"Towards {station['Fernziel_Ri2']}" if pd.notna(station['Fernziel_Ri2']) else "Direction 2"}
+    side = st.radio("Closed lanes", list(side_options), format_func=side_options.get)
+with c2:
+    st.markdown('<div class="step">2 · Work</div>', unsafe_allow_html=True)
+    shift = st.segmented_control("Working hours", list(SHIFT_LABELS), format_func=SHIFT_LABELS.get,
+                                 default='day') or 'day'
+    max_hours = min(12, len(scheduler.SHIFTS[shift][1]))
+    hours = st.slider("Hours per work session", 1, max_hours, min(4, max_hours),
+                      help="One uninterrupted work session. The app looks for the quietest block of this length.")
+with c3:
+    st.markdown('<div class="step">3 · When</div>', unsafe_allow_html=True)
+    earliest = st.date_input("Earliest start", value=datetime.date.today(), format="DD.MM.YYYY")
+    weeks = st.slider("Duration (weeks, one session per week)", 1, 26, 4)
+
+st.divider()
+
+# --- Result -----------------------------------------------------------------------
+if station_id not in stations_with_data:
+    nearby = sorted(((distance_km(station['lat'], station['lon'], r.lat, r.lon), r.DZ_Name)
+                     for r in coords.itertuples()
+                     if r.DZ_Nr in stations_with_data), key=lambda x: x[0])[:2]
+    near = ' and '.join(f"{name} ({d:.0f} km away)" for d, name in nearby)
+    st.info(f"There are no traffic counts for {station['DZ_Name']} in the years used, so no recommendation "
+            f"can be made here. Stations with data nearby: {near}.")
     st.stop()
 
-years_info = year_status(data_dir)
-check_issues, check_table = run_data_check(df, full_year=not is_sample)
+rec = recommendation(data_dir, station_id, side, shift, hours, earliest, weeks)
+if rec is None:
+    st.info("There are not enough counts for this station and these working hours to make a recommendation. "
+            "Try another station or longer working hours.")
+    st.stop()
 
-month_names = {1:'January',2:'February',3:'March',4:'April',5:'May',6:'June',
-               7:'July',8:'August',9:'September',10:'October',11:'November',12:'December'}
+best, busiest = rec['best'], rec['busiest']
+window_text = rec['label'].split(', ', 1)[1]
+low_high = scheduler.expected_range(rec['expected'], accuracy)
+season_text = months_text(scheduler.season_months(rec['months'], rec['estimate_profile']))
+last_session = rec['start_date'] + datetime.timedelta(weeks=weeks - 1)
+if low_high:
+    traffic_value = f"{low_high[0]:,.0f}–{low_high[1]:,.0f}"
+    traffic_note = (f"Estimate from the {', '.join(map(str, used_years))} counts for {season_text}. In tests on past "
+                    f"weeks, the measured traffic was inside this range about 8 times out of 10.")
+else:
+    traffic_value = f"about {rec['expected']:,.0f}"
+    traffic_note = f"Estimate from the {', '.join(map(str, used_years))} counts for {season_text}."
+busiest_label = scheduler.window_label(int(busiest['dow']), int(busiest['clock']), hours).replace('s, ', ' ', 1)
+holiday_note = ""
+if rec['holidays_on_work_days']:
+    days = ', '.join(f"{d:%d %b}" for d, _ in rec['holidays_on_work_days'])
+    holiday_note = f"<div class='note'>Public holiday on a work day: {html.escape(days)}.</div>"
+station_note = ""
+if not check_table.empty:
+    row = check_table[check_table['station'] == station_id]
+    if len(row) and row['estimated_share'].mean() >= 0.25:
+        station_note = (f"<div class='note'>{row['estimated_share'].mean():.0%} of this station's counts are "
+                        f"estimates by BASt, so its figures are less certain.</div>")
 
-years_loaded = sorted(df['year'].unique())
-stations_with_data = set(df['Zst'].unique())
-data_period = f"{df['Datum'].min():%d %b %Y} to {df['Datum'].max():%d %b %Y}"
-if is_sample:
-    st.warning(f"**Demo sample.** The full traffic data is not installed, so the app is using the small "
-               f"extract in `sample_data/`: {len(stations_with_data)} stations, {data_period}. "
-               f"The numbers are real BASt counts but cover only part of the year, so results are "
-               f"for demonstration only. Run `python scripts/fetch_data.py` for the full data.")
-stations_without_data = coords[~coords['DZ_Nr'].isin(stations_with_data)]
-if years_info['missing'] and not is_sample:
-    st.info(f"Configured years: {', '.join(str(y) for y in years_info['configured'])}. "
-            f"No data folder for {', '.join(str(y) for y in years_info['missing'])}, so the app uses "
-            f"{', '.join(str(y) for y in years_info['used'])} only. {len(stations_without_data)} of "
-            f"{len(coords)} stations have no traffic data for the years in use; they are marked "
-            f"\"no traffic data\" in the station list and grey on the map.")
-ignored_note = (f" Also present but not used: {', '.join(str(y) for y in years_info['ignored'])} "
-                f"(set A3_YEARS to include them)." if years_info['ignored'] and not is_sample else "")
-st.caption(f"Data loaded: {len(df):,} hourly records from {len(stations_with_data)} stations, "
-           f"years {', '.join(str(y) for y in years_loaded)}. "
-           f"{len(prophet_results)} stations have a precomputed seasonal forecast.{ignored_note}")
-if check_issues:
-    st.warning(f"Data check: {len(check_issues)} finding(s). The app still works; results for the "
-               f"affected stations may be less reliable.")
-    with st.expander("Data check details"):
+st.markdown(f"""
+<div class="result">
+  <div class="label">Recommended work window · {html.escape(station['DZ_Name'])} · {html.escape(side_options[side])}</div>
+  <div class="window">{html.escape(rec['label'])}</div>
+  <div class="dates">{weeks} weekly session{'s' if weeks > 1 else ''} of {hours} h:
+     {f"{rec['start_date']:%d %b %Y} to {last_session:%d %b %Y}" if weeks > 1 else f"{rec['start_date']:%d %b %Y}"}</div>
+  <div class="facts">
+    <div class="fact"><div class="value">{traffic_value}</div><div class="what">vehicles per hour expected</div></div>
+    <div class="fact"><div class="value">{rec['reduction']:.0%} quieter</div>
+         <div class="what">than the busiest {hours}-hour window ({html.escape(busiest_label)})</div></div>
+  </div>
+  <div class="note">{html.escape(traffic_note)}</div>
+  {holiday_note}{station_note}
+</div>
+""", unsafe_allow_html=True)
+
+tab_week, tab_map, tab_month, tab_details, tab_data = st.tabs(["Week", "Map", "Months", "Details", "Data"])
+
+with tab_week:
+    day_short = [d[:3] for d in scheduler.DAY_NAMES]
+    prof = rec['profile']
+    cells = pd.DataFrame({'day': [day_short[i // 24] for i in range(168)], 'hour': [i % 24 for i in range(168)],
+                          'traffic': prof['avg_traffic'].round().to_numpy()})
+    cells['time'] = cells['hour'].map(lambda h: f"{h:02d}:00–{(h + 1) % 24:02d}:00")
+    window_slots = [(int(best['start_slot']) + k) % 168 for k in range(hours)]
+    base = alt.Chart(cells).encode(
+        x=alt.X('hour:O', title='Time of day', axis=alt.Axis(values=list(range(0, 24, 3)), labelAngle=0,
+                labelExpr="(datum.value < 10 ? '0' : '') + datum.value + ':00'", labelOverlap='parity',
+                labelSeparation=12, **AXIS)),
+        y=alt.Y('day:O', sort=day_short, title=None, axis=alt.Axis(labelOverlap=False, **AXIS)))
+    heat = base.mark_rect().encode(
+        color=alt.Color('traffic:Q', title='Vehicles/hour', scale=alt.Scale(range=SCALE),
+                        legend=alt.Legend(orient='bottom', gradientLength=220, labelFontSize=11, titleFontSize=11,
+                                          labelColor='#4b5563', titleColor='#374151')),
+        tooltip=[alt.Tooltip('day:O', title='Day'), alt.Tooltip('time:N', title='Time'),
+                 alt.Tooltip('traffic:Q', title='Vehicles/hour', format=',.0f')])
+    # Outline the exact cells of the window (it may cross midnight)
+    mark = alt.Chart(cells.iloc[window_slots]).mark_rect(fill=None, stroke=MARK, strokeWidth=2.5).encode(
+        x='hour:O', y=alt.Y('day:O', sort=day_short))
+    st.altair_chart((heat + mark).properties(height=alt.Step(30)), width='stretch')
+    side_text = "both directions" if side == SIDE_ANY else side_options[side].replace('Towards', 'towards')
+    st.caption(f"Average measured traffic for each day and hour ({side_text}), "
+               f"all of {', '.join(map(str, used_years))} except public holidays. "
+               "The orange outline marks the recommended window. Darker = more traffic.")
+
+with tab_map:
+    avg = df.groupby('Zst')['total_traffic'].mean()
+    m = coords.assign(avg=coords['DZ_Nr'].map(avg).round(), selected=coords['DZ_Nr'] == station_id)
+    m['traffic'] = m['avg'].map(lambda v: 'no data' if pd.isna(v) else f"{v:,.0f} vehicles/hour")
+    proj = dict(type='mercator')
+    route = alt.Chart(m.sort_values('lon').assign(order=range(len(m)))).mark_line(
+        color='#e5e7eb', strokeWidth=4).encode(longitude='lon:Q', latitude='lat:Q', order='order:Q')
+    tooltip = [alt.Tooltip('DZ_Name:N', title='Station'), alt.Tooltip('traffic:N', title='Average')]
+    # Stations without counts in their own layer: Vega drops empty values from a colour scale
+    no_counts = alt.Chart(m[m['avg'].isna()]).mark_circle(size=45, color='#b8bec8', opacity=1).encode(
+        longitude='lon:Q', latitude='lat:Q', tooltip=tooltip)
+    points = alt.Chart(m[m['avg'].notna()]).mark_circle(size=70, stroke='#9ca3af', strokeWidth=0.5,
+                                                        opacity=1).encode(
+        longitude='lon:Q', latitude='lat:Q',
+        color=alt.Color('avg:Q', title='Average vehicles/hour', scale=alt.Scale(range=SCALE, domainMin=0),
+                        legend=alt.Legend(orient='bottom', gradientLength=220, labelFontSize=11, titleFontSize=11,
+                                          labelColor='#4b5563', titleColor='#374151')),
+        tooltip=tooltip)
+    ring = alt.Chart(m[m['selected']]).mark_circle(size=320, fill=None, stroke=MARK, strokeWidth=2.5).encode(
+        longitude='lon:Q', latitude='lat:Q')
+    towns = pd.DataFrame([('Aschaffenburg', 49.97, 9.15, 'left'), ('Würzburg', 49.79, 9.95, 'center'),
+                          ('Nürnberg', 49.45, 11.08, 'center'), ('Regensburg', 49.01, 12.10, 'center'),
+                          ('Passau', 48.57, 13.43, 'right')], columns=['name', 'lat', 'lon', 'align'])
+    labels_layer = alt.layer(*[alt.Chart(towns[towns['align'] == a]).mark_text(
+        dy=16, fontSize=11, color=MUTED, align=a).encode(longitude='lon:Q', latitude='lat:Q', text='name:N')
+        for a in ('left', 'center', 'right')])
+    st.altair_chart(alt.layer(route, no_counts, points, ring, labels_layer).project(**proj).properties(height=340),
+                    width='stretch')
+    st.caption("Counting stations on the A3 in Bavaria, coloured by average traffic (both directions); grey = no "
+               "counts. The orange ring is your station. The grey line joins the stations from west to east and "
+               "only roughly follows the road.")
+    with st.expander("Interactive map with streets (needs an internet connection)"):
+        fmap = folium.Map(location=[49.4, 11.0], zoom_start=7, tiles='OpenStreetMap')
+        for r in m.itertuples():
+            folium.CircleMarker([r.lat, r.lon], radius=9 if r.selected else 5,
+                                color=MARK if r.selected else ('#9ca3af' if pd.isna(r.avg) else ACCENT),
+                                fill=True, fill_opacity=0.8, popup=f"{r.DZ_Name}<br>{r.traffic}").add_to(fmap)
+        st_folium(fmap, height=420, use_container_width=True, key="a3_map", returned_objects=[])
+
+with tab_month:
+    rows, _ = scheduler.prepare(df[df['Zst'] == station_id], side)
+    in_window = rows[(rows['dow'] * 24 + rows['clock']).isin(set(window_slots))]
+    by_month = in_window.groupby(in_window['Datum'].dt.month)['traffic'].mean().reindex(range(1, 13))
+    bars = pd.DataFrame({'month': MONTHS, 'traffic': by_month.round().to_numpy(),
+                         'project': ['your project' if mth in rec['months'] else 'other months' for mth in range(1, 13)]})
+    chart = alt.Chart(bars).mark_bar(cornerRadiusTopLeft=3, cornerRadiusTopRight=3).encode(
+        x=alt.X('month:O', sort=MONTHS, title=None, axis=alt.Axis(labelAngle=0, **AXIS)),
+        y=alt.Y('traffic:Q', title='Vehicles/hour', axis=alt.Axis(grid=True, gridColor='#eef0f3', **AXIS)),
+        color=alt.Color('project:N', scale=alt.Scale(domain=['your project', 'other months'],
+                                                     range=[ACCENT, '#cbd5e1']),
+                        legend=alt.Legend(orient='bottom', title=None, labelFontSize=11, labelColor='#374151')),
+        tooltip=[alt.Tooltip('month:O', title='Month'), alt.Tooltip('traffic:Q', title='Vehicles/hour', format=',.0f')])
+    st.altair_chart(chart.properties(height=260), width='stretch')
+    best_day = scheduler.DAY_NAMES[int(best['dow'])]
+    quietest = by_month.idxmin() if by_month.notna().any() else None
+    st.caption(f"Measured average traffic in the recommended window ({best_day}s, {window_text}) for each month "
+               f"of {', '.join(map(str, used_years))}."
+               + (f" Quietest month for this window: {MONTHS[quietest - 1]}." if quietest else "")
+               + (" Months without bars have no counts." if by_month.isna().any() else ""))
+
+with tab_details:
+    top = rec['windows'].head(5)
+    st.markdown("**The five best windows**")
+    st.dataframe(pd.DataFrame({
+        'Window': [scheduler.window_label(int(r.dow), int(r.clock), hours) for r in top.itertuples()],
+        'Average traffic, all year (vehicles/hour)': top['avg_traffic'].round(),
+        'Trucks (%)': top['avg_truck_ratio'] * 100,
+        'Score (0–1)': top['score'],
+    }), hide_index=True, width='stretch', column_config={
+        'Average traffic, all year (vehicles/hour)': st.column_config.NumberColumn(format='%d'),
+        'Trucks (%)': st.column_config.NumberColumn(format='%.1f'),
+        'Score (0–1)': st.column_config.NumberColumn(format='%.2f')})
+    st.markdown(
+        "**How the window is chosen.** Every block of consecutive hours inside your working hours is scored on "
+        "the average traffic of all measured weeks (less traffic and fewer trucks score higher). Public holidays "
+        "and counts BASt marked as implausible are left out. The expected traffic is then taken from the same "
+        "months of the year as your project, plus one month on either side.")
+    total_hours = weeks * hours
+    co2 = (float(busiest['avg_traffic']) - rec['expected']) * 0.24 * total_hours / 1000
+    st.markdown(f"**Rough CO2 comparison.** Working in this window instead of the busiest one affects about "
+                f"{(float(busiest['avg_traffic']) - rec['expected']) * total_hours:,.0f} fewer vehicles over the "
+                f"project. If each of them drove a 2 km detour at 120 g CO2/km, that would be about {co2:,.1f} t "
+                "of CO2. This is an illustration, not a measurement.")
+    weather = weather_outlook(station['lat'], station['lon'], rec['start_date'])
+    if weather:
+        st.markdown(f"**Weather on {rec['start_date']:%d %b}** (Open-Meteo forecast): up to {weather[1]:.0f} °C, "
+                    f"{weather[0]:.1f} mm precipitation.")
+    if rec['holidays']:
+        st.markdown("**Public holidays in Bavaria during the project:** " +
+                    ', '.join(f"{d:%d %b %Y} ({n})" for d, n in rec['holidays']))
+
+with tab_data:
+    st.markdown("Hourly traffic counts and station list: Bundesanstalt für Straßenwesen (BASt), automatische "
+                "Dauerzählstellen, licensed under the [Datenlizenz Deutschland – Namensnennung – Version 2.0]"
+                "(https://www.govdata.de/dl-de/by-2-0). The files were reorganised and station names repaired "
+                "(see DATA_LICENSE.md).")
+    year_lines = [f"Years used: {', '.join(map(str, used_years))}."]
+    if years['missing'] and not is_sample:
+        year_lines.append(f"Configured but not installed: {', '.join(map(str, years['missing']))}.")
+    if years['ignored'] and not is_sample:
+        year_lines.append(f"Installed but not used: {', '.join(map(str, years['ignored']))}.")
+    st.markdown(' '.join(year_lines) + f" {len(stations_with_data)} of {len(coords)} stations have counts "
+                "for the years used.")
+    if accuracy:
+        st.markdown(f"**Accuracy in tests on past weeks:** hourly error {accuracy['hourly_mape']:.0f}%, "
+                    f"recommended window among the 3 quietest in {accuracy['top3']:.0%} of "
+                    f"{accuracy['tests']} tests (README, section \"Accuracy\").")
+    if check_issues:
+        st.markdown("**Data check findings**")
         for issue in check_issues:
             st.markdown(f"- {issue}")
-        st.caption("Checked on load: hours per station and year, duplicate and missing hours, empty, negative "
-                   "and impossible counts (over 10,000 vehicles per hour in one direction), more trucks than "
-                   "vehicles, and BASt quality flags ('s' = estimated, 'u' = implausible).")
-
-# --- Inputs -----------------------------------------------------------------
-with st.container(border=True):
-    left, right = st.columns(2, gap="large")
-    with left:
-        st.markdown("**Where**")
-        station_choices = coords
-        if is_sample:
-            # The sample only has counts for a few stations; list just those
-            station_choices = coords[coords['DZ_Nr'].isin(stations_with_data)]
-        # Stations with data first, then the rest, each sorted by name
-        station_choices = station_choices.assign(has_data=station_choices['DZ_Nr'].isin(stations_with_data))
-        station_choices = station_choices.sort_values(['has_data', 'DZ_Name'], ascending=[False, True])
-        station_labels = {row.DZ_Nr: row.DZ_Name if row.has_data else f"{row.DZ_Name} (no traffic data)"
-                          for row in station_choices.itertuples()}
-        station_id = st.selectbox("Counting station", list(station_labels), format_func=station_labels.get)
-        station_row = coords[coords['DZ_Nr'] == station_id].iloc[0]
-        station_name = station_row['DZ_Name']
-        dir1_label = f"→ {station_row['Fernziel_Ri1']}" if pd.notna(station_row['Fernziel_Ri1']) else "Direction 1"
-        dir2_label = f"→ {station_row['Fernziel_Ri2']}" if pd.notna(station_row['Fernziel_Ri2']) else "Direction 2"
-        direction_choice = st.radio(
-            "Affected side of the road",
-            ["Both directions (full closure)", dir1_label, dir2_label],
-        )
-        if station_id not in stations_with_data:
-            st.warning("No traffic counts are loaded for this station for the years in use, so no schedule "
-                       "can be computed. Stations with data are at the top of the list.")
-    with right:
-        st.markdown("**When**")
-        earliest_start = st.date_input("Earliest possible start date", value=datetime.date.today())
-        duration_weeks = st.slider("Construction duration (weeks)", 1, 26, 4)
-        work_hours = st.select_slider("Daily working hours",
-                                        options=["Night only (22-06)", "Day (06-18)", "24h (always)"],
-                                        value="Day (06-18)")
-        shift_length = len(scheduler.SHIFTS[scheduler.SHIFT_BY_LABEL[work_hours]][1])
-        window_hours = st.slider("Hours per work session", 1, min(12, shift_length), min(4, shift_length),
-                                 help="Length of one uninterrupted work session. The app looks for the quietest "
-                                      "block of this many consecutive hours inside the working hours.")
-
-    current_inputs = (station_id, duration_weeks, work_hours, window_hours, direction_choice, earliest_start)
-    find_clicked = st.button("Find best schedule", type="primary")
-
-if "show_results" not in st.session_state:
-    st.session_state.show_results = False
-
-if find_clicked:
-    st.session_state.show_results = True
-    st.session_state.station_id = station_id
-    st.session_state.station_name = station_name
-    st.session_state.station_lat = station_row['lat']
-    st.session_state.station_lon = station_row['lon']
-    st.session_state.duration_weeks = duration_weeks
-    st.session_state.work_hours = work_hours
-    st.session_state.window_hours = window_hours
-    st.session_state.direction_choice = direction_choice
-    st.session_state.dir1_label = dir1_label
-    st.session_state.dir2_label = dir2_label
-    st.session_state.earliest_start = earliest_start
-    st.session_state.inputs = current_inputs
-
-
-def show_results():
-    station_id = st.session_state.station_id
-    station_name = st.session_state.station_name
-    duration_weeks = st.session_state.duration_weeks
-    work_hours = st.session_state.work_hours
-    window_hours = st.session_state.window_hours
-    direction_choice = st.session_state.direction_choice
-    dir1_label = st.session_state.dir1_label
-    dir2_label = st.session_state.dir2_label
-    earliest_start = st.session_state.earliest_start
-
-    station_data = df[df['Zst'] == station_id].copy()
-
-    if station_data.empty:
-        st.error(f"No traffic data is loaded for {station_name}, so no schedule can be computed. "
-                 "Pick a different station.")
-        return
-
-    side = 'R1' if direction_choice == dir1_label else 'R2' if direction_choice == dir2_label else 'both'
-    shift = scheduler.SHIFT_BY_LABEL[work_hours]
-    rec = scheduler.recommend(station_data, side, shift, window_hours, earliest_start, duration_weeks)
-    if rec is None:
-        st.error("There is not enough usable traffic data for this station and these working hours "
-                 "to compute a schedule.")
-        return
-
-    best, worst, windows = rec['best'], rec['worst'], rec['windows']
-    reduction = rec['reduction'] * 100
-    start_date, end_date = rec['start_date'], rec['end_date']
-    best_dow = int(best['dow'])
-    best_day_full = scheduler.DAY_NAMES[best_dow]
-    window_text = rec['label'].split(', ', 1)[1]
-
-    # One work session per week, as the headline says
-    total_hours = duration_weeks * window_hours
-    co2_best = best['avg_traffic'] * 0.24 * total_hours
-    co2_worst = worst['avg_traffic'] * 0.24 * total_hours
-
-    # --- Headline -------------------------------------------------------
-    with st.container(border=True):
-        st.markdown("#### Recommended time for the roadworks")
-        st.markdown(f"## {rec['label']}, from {start_date.strftime('%d %B %Y')} "
-                    f"to {end_date.strftime('%d %B %Y')}")
-        st.write(f"Station: **{station_name}**. Affected side: **{direction_choice}**. "
-                 f"Working hours: **{work_hours}**, sessions of **{window_hours} h**. "
-                 f"The work session repeats every week until the project ends.")
-        st.caption(
-            f"How this was chosen: every block of {window_hours} consecutive hours inside your working hours "
-            f"was scored using the historical counts for this station ({data_period}"
-            f"{', demo sample only' if is_sample else ''}). Blocks with less traffic on the affected side and "
-            f"a lower share of trucks score higher; {best_day_full} {window_text} scored highest. The project "
-            f"starts on the first {best_day_full} on or after your earliest start date. Times are local clock "
-            f"times (BASt hour 1 = 00:00–01:00). Public holidays and hours BASt marked implausible are left "
-            f"out of the averages ({rec['excluded']['holiday']:,} and {rec['excluded']['implausible']:,} hours)."
-        )
-
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Average traffic in the recommended window", f"{best['avg_traffic']:.0f} vehicles/hour")
-    c2.metric("Less traffic than the worst window", f"{reduction:.0f}%",
-              help=f"Compared with the lowest-scoring {window_hours}-hour window inside your working hours "
-                   f"({scheduler.window_label(int(worst['dow']), int(worst['clock']), window_hours)}, "
-                   f"{worst['avg_traffic']:.0f} vehicles/hour).")
-    c3.metric("Estimated CO2 avoided over the project", f"{(co2_worst-co2_best)/1000:.1f} t",
-              help=f"Rough estimate for {total_hours} work hours ({duration_weeks} weekly sessions of "
-                   f"{window_hours} h): assumes each affected vehicle drives a 2 km detour at 120 g CO2/km "
-                   "(0.24 kg per vehicle), compared with working in the worst window.")
-
-    if rec['holidays']:
-        on_days = rec['holidays_on_work_days']
-        listed = ', '.join(f"{d:%d %b %Y} ({n})" for d, n in rec['holidays'])
-        st.info(f"Public holidays in Bavaria during the project: {listed}. "
-                + (f"{len(on_days)} of them fall on a work day ({best_day_full}). " if on_days else "")
-                + "Traffic on public holidays is usually lower than on normal weekdays; they are not part of "
-                  "the averages above.")
-
-    if duration_weeks <= 2:
-        weather = get_weather_outlook(st.session_state.station_lat, st.session_state.station_lon, start_date)
-        if weather:
-            rain, temp = weather
-            st.write(f"Weather forecast for {start_date.strftime('%d %B')} (Open-Meteo): "
-                     f"up to **{temp:.0f} °C**, **{rain:.1f} mm** precipitation. "
-                     "Shown only for short projects starting within about 15 days; it does not affect the recommendation.")
-
-    # --- Seasonal alternative (long projects only) ------------------------
-    best_month = None
-    if duration_weeks > 6:
-        station_prophet = prophet_results.get(str(int(station_id)))
-
-        if station_prophet:
-            month_traffic = {int(k): v for k, v in station_prophet.items()}
-            forecast_source = "this station's precomputed Prophet forecast"
-        else:
-            month_traffic = {1: 2751, 2: 2924, 3: 3043, 4: 3064, 5: 2945, 6: 2899,
-                              7: 3209, 8: 3011, 9: 2837, 10: 2636, 11: 2210, 12: 2065}
-            forecast_source = ("a fixed network-wide estimate, because no station-specific forecast "
-                               "exists for this station")
-        best_month = min(month_traffic, key=month_traffic.get)
-
-        year = earliest_start.year
-        if best_month < earliest_start.month:
-            year += 1
-        candidate = datetime.date(year, best_month, 1)
-        if candidate < earliest_start:
-            candidate = datetime.date(year + 1, best_month, 1)
-
-        days_ahead_seasonal = (best_dow - candidate.weekday()) % 7
-        seasonal_start = candidate + datetime.timedelta(days=days_ahead_seasonal)
-        seasonal_end = seasonal_start + datetime.timedelta(weeks=duration_weeks)
-
-        st.subheader("Seasonal alternative")
-        st.info(f"Because this project runs {duration_weeks} weeks, the time of year matters too. "
-                f"**{month_names[best_month]}** has the lowest average traffic in {forecast_source}. "
-                f"Alternative start in that month: **{seasonal_start.strftime('%d %B %Y')} → "
-                f"{seasonal_end.strftime('%d %B %Y')}**, still on {best_day_full}s.")
-
-        months = list(range(1, 13))
-        values = [month_traffic.get(m, float('nan')) for m in months]
-        fig, ax = plt.subplots(figsize=(10, 3))
-        colors = ['#2a6fdb' if m == best_month else '#b8c4d6' for m in months]
-        ax.bar([month_names[m][:3] for m in months], values, color=colors, width=0.7)
-        ax.annotate(f"{month_traffic[best_month]:.0f}", (best_month - 1, month_traffic[best_month]),
-                    xytext=(0, 3), textcoords="offset points", ha='center', fontsize=9)
-        ax.set_xlabel("Month")
-        ax.set_ylabel("Vehicles per hour")
-        ax.set_title("Average traffic per month, both directions (dark bar = lowest month)", fontsize=10)
-        ax.spines[['top', 'right']].set_visible(False)
-        ax.grid(axis='y', alpha=0.3)
-        ax.set_axisbelow(True)
-        fig.tight_layout()
-        st.pyplot(fig)
-        plt.close(fig)
-        st.caption("What this chart shows: the average number of vehicles per hour (both directions added "
-                   "together) for each calendar month, taken from the precomputed seasonal values. "
-                   "Only the lowest month is used by the app. These are model estimates, not measured counts; "
-                   "see the README section \"Limitations\" for how they were produced.")
-
-    # --- Weekly pattern -------------------------------------------------
-    st.subheader("Weekly traffic pattern at this station")
-    profile = rec['profile']['avg_traffic'].to_numpy().reshape(7, 24)
-    fig, ax = plt.subplots(figsize=(12, 4))
-    im = ax.imshow(profile, aspect='auto', cmap='Blues')
-    ax.set_yticks(range(7))
-    ax.set_yticklabels([d[:3] for d in scheduler.DAY_NAMES])
-    ax.set_xticks(range(24))
-    ax.set_xticklabels([f"{h:02d}" for h in range(24)], fontsize=8)
-    ax.set_xlabel("Hour of day (start of the hour, local time)")
-    ax.set_ylabel("Day of week")
-    ax.set_title(f"{station_name} — {direction_choice}", fontsize=10)
-    for k in range(window_hours):
-        slot = (int(best['start_slot']) + k) % 168
-        ax.add_patch(Rectangle((slot % 24 - 0.5, slot // 24 - 0.5), 1, 1, fill=False,
-                               edgecolor='#e8590c', linewidth=2.5))
-    plt.colorbar(im, label='Average vehicles per hour')
-    fig.tight_layout()
-    st.pyplot(fig)
-    plt.close(fig)
-    st.caption("What this chart shows: measured historical traffic, not a forecast. Each cell is the average "
-               "number of vehicles per hour on the selected side of the road for that weekday and hour, "
-               "over all loaded data except public holidays. Darker means more traffic. The orange boxes mark "
-               "the recommended window. The chart covers all 24 hours; the recommendation only considers your "
-               "working hours.")
-
-    # Month x weekday view of the measured counts. Idea adapted from
-    # plot_month_dow() in heatmap.py of the aitraffic project
-    # (github.com/DanieMyl/aitraffic).
-    with st.expander("Measured traffic by month and weekday"):
-        rows, _ = scheduler.prepare(station_data, side)
-        in_shift = rows[rows['clock'].isin(scheduler.SHIFTS[shift][1])]
-        month_pivot = (in_shift.assign(month=in_shift['Datum'].dt.month)
-                       .groupby(['dow', 'month'])['traffic'].mean().unstack())
-        fig, ax = plt.subplots(figsize=(12, 3.5))
-        im = ax.imshow(month_pivot.values, aspect='auto', cmap='Blues')
-        ax.set_yticks(range(len(month_pivot.index)))
-        ax.set_yticklabels([scheduler.DAY_NAMES[d][:3] for d in month_pivot.index])
-        ax.set_xticks(range(len(month_pivot.columns)))
-        ax.set_xticklabels([month_names[m][:3] for m in month_pivot.columns])
-        ax.set_xlabel("Month")
-        ax.set_ylabel("Day of week")
-        ax.set_title(f"{station_name} — {direction_choice}, {work_hours}", fontsize=10)
-        plt.colorbar(im, label='Average vehicles per hour')
-        fig.tight_layout()
-        st.pyplot(fig)
-        plt.close(fig)
-        st.caption("What this chart shows: measured historical traffic within your working hours, averaged "
-                   f"per month and weekday ({data_period}). Unlike the seasonal chart above, these are counts, "
-                   "not model values. Months without data are left blank.")
-
-    st.subheader("Top 5 windows")
-    top5 = windows.head(5).assign(
-        Window=[scheduler.window_label(int(r.dow), int(r.clock), window_hours) for r in windows.head(5).itertuples()])
-    st.dataframe(
-        top5[['Window', 'avg_traffic', 'avg_truck_ratio', 'score']]
-        .rename(columns={'avg_traffic': 'Avg vehicles/hour', 'avg_truck_ratio': 'Truck share', 'score': 'Score (0–1)'})
-        .style.format({'Avg vehicles/hour': '{:.0f}', 'Truck share': '{:.1%}', 'Score (0–1)': '{:.2f}'})
-        .background_gradient(subset=['Score (0–1)'], cmap='Greens'),
-        width='stretch',
-        hide_index=True,
-    )
-
-    with st.expander("How the score is calculated"):
-        st.write(f"Each {window_hours}-hour window gets two sub-scores, computed on the window's averages, "
-                 "which are multiplied:")
-        st.markdown(
-            "- **Traffic score** = 1 − (average traffic in this window ÷ highest average traffic among the "
-            "windows inside your working hours)\n"
-            "- **Truck score** = 1 − average share of trucks in this window\n"
-            "- **Score** = traffic score × truck score. A window only scores well if both are good."
-        )
-        pc1, pc2, pc3 = st.columns(3)
-        pc1.metric("Traffic score (recommended window)", f"{best['traffic_score']:.2f}")
-        pc2.metric("Truck score (recommended window)", f"{1-best['avg_truck_ratio']:.2f}")
-        pc3.metric("Score (recommended window)", f"{best['score']:.2f}")
-
-    # --- Network map ----------------------------------------------------
-    st.subheader("A3 network overview")
-
-    if duration_weeks > 6 and best_month is not None:
-        month_mask = df['Datum'].dt.month == best_month
-        station_avg_traffic = df[month_mask].groupby('Zst')['total_traffic'].mean().reset_index()
-        map_period_label = f"average for {month_names[best_month]}, the month of the seasonal alternative"
     else:
-        station_avg_traffic = df.groupby('Zst')['total_traffic'].mean().reset_index()
-        map_period_label = "average over all loaded data"
-    station_avg_traffic.columns = ['DZ_Nr', 'avg_traffic']
-
-    st.caption(f"Each dot is a counting station. Colour shows its average traffic, both directions "
-               f"({map_period_label}), relative to the busiest station: green = under 40% of the busiest, "
-               f"orange = 40–70%, red = over 70%, grey = no data. Your selection ({station_name}) has a blue ring. "
-               f"The dashed line connects stations from west to east and only roughly follows the road. "
-               f"Map tiles need an internet connection.")
-
-    map_data = coords.merge(station_avg_traffic, on='DZ_Nr', how='left')
-    map_data['map_score'] = 1 - (map_data['avg_traffic'] / map_data['avg_traffic'].max())
-    map_data = map_data.dropna(subset=['lat', 'lon'])
-
-    m = folium.Map(location=[49.6, 10.5], zoom_start=8)
-
-    legend_html = '''
-    <div style="position: fixed; bottom: 50px; left: 50px; z-index:9999; background: white; padding: 10px; border-radius: 5px; font-size: 14px;">
-    <b>Traffic level</b><br>
-    <span style="color:green;">●</span> Low (good for roadworks)<br>
-    <span style="color:orange;">●</span> Medium<br>
-    <span style="color:red;">●</span> High (avoid)<br>
-    <span style="color:gray;">●</span> No data<br>
-    <span style="color:blue;">○</span> Selected station
-    </div>
-    '''
-    m.get_root().html.add_child(folium.Element(legend_html))
-
-    route_coords = map_data.sort_values('lon')[['lat','lon']].values.tolist()
-    folium.PolyLine(route_coords, color='#1f77b4', weight=5, opacity=0.85, dash_array='10').add_to(m)
-
-    for i, row in map_data.iterrows():
-        if pd.isna(row['map_score']):
-            color = 'gray'
-        elif row['map_score'] > 0.6:
-            color = 'green'
-        elif row['map_score'] > 0.3:
-            color = 'orange'
-        else:
-            color = 'red'
-
-        is_selected = row['DZ_Nr'] == station_id
-        folium.CircleMarker(
-            location=[row['lat'], row['lon']],
-            radius=12 if is_selected else 7,
-            color='blue' if is_selected else color,
-            fill=True,
-            fill_color=color,
-            fill_opacity=0.8,
-            popup=f"{row['DZ_Name']}<br>{row['avg_traffic']:.0f} vehicles/hour" if not pd.isna(row['avg_traffic']) else f"{row['DZ_Name']}<br>no data"
-        ).add_to(m)
-
-    st_folium(m, height=500, use_container_width=True, key="a3_map", returned_objects=[])
-
-
-if st.session_state.show_results:
-    if st.session_state.get("inputs") != current_inputs:
-        st.info("The inputs above have changed. The results below are still for the previous inputs; "
-                "click \"Find best schedule\" to update them.")
-    try:
-        show_results()
-    except Exception as e:
-        st.error("Something went wrong while computing the schedule for these inputs. "
-                 "Try a different station or setting.")
-        with st.expander("Technical details"):
-            st.code(f"{type(e).__name__}: {e}")
-
-with st.expander("About the data"):
-    coverage = coords[['DZ_Nr', 'DZ_Name', 'name_status']].copy()
-    coverage['Traffic data loaded'] = coverage['DZ_Nr'].isin(stations_with_data).map({True: 'yes', False: 'no'})
-    coverage['Station forecast'] = coverage['DZ_Nr'].astype(int).astype(str).isin(prophet_results.keys()).map({True: 'yes', False: 'no (fallback)'})
+        st.markdown("**Data check:** no problems found (hours per year, duplicates, impossible values).")
+    table = coords[['DZ_Nr', 'DZ_Name']].assign(
+        data=coords['DZ_Nr'].isin(stations_with_data).map({True: 'yes', False: 'no'}))
     if not check_table.empty:
-        quality = (check_table.groupby('station')
-                   .agg(estimated=('estimated_share', 'mean'), implausible=('implausible_flags', 'sum'))
-                   .reset_index())
-        coverage = coverage.merge(quality, left_on='DZ_Nr', right_on='station', how='left').drop(columns='station')
-        coverage['estimated'] = coverage['estimated'].map(lambda v: '' if pd.isna(v) else f"{v:.0%}")
-        coverage['implausible'] = coverage['implausible'].map(lambda v: '' if pd.isna(v) else f"{int(v):,}")
-    coverage['name_status'] = coverage['name_status'].map(
-        {'ok': '', 'repaired': 'repaired', 'damaged': 'damaged in source'})
-    st.write(f"Hourly traffic counts: BASt (Bundesanstalt für Straßenwesen), years "
-             f"{', '.join(str(y) for y in years_loaded)}. Station locations and direction names: BASt "
-             f"`{coords.attrs.get('source_file', 'Jawe')}`, A3 in Bavaria only. "
-             f"{len(stations_with_data & set(coords['DZ_Nr']))} of {len(coords)} stations have traffic data loaded.")
-    st.caption("\"estimated\": share of hourly counts BASt marked as estimated ('s'). \"implausible\": counts "
-               "marked implausible ('u'). \"Name\": 'repaired' means umlauts lost in the source file were "
-               "restored from the Jawe2022 names in analysis.ipynb (checked letter by letter).")
-    st.dataframe(coverage.rename(columns={'DZ_Nr': 'Station ID', 'DZ_Name': 'Station', 'name_status': 'Name',
-                                          'estimated': 'Estimated', 'implausible': 'Implausible'}),
-                 width='stretch', hide_index=True)
+        est = check_table.groupby('station')['estimated_share'].mean()
+        table['estimated'] = table['DZ_Nr'].map(est).map(lambda v: '' if pd.isna(v) else f"{v:.0%}")
+    st.dataframe(table.rename(columns={'DZ_Nr': 'Station', 'DZ_Name': 'Name', 'data': 'Counts',
+                                       'estimated': 'Estimated by BASt'}), hide_index=True, width='stretch')
