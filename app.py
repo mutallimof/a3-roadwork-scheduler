@@ -156,7 +156,7 @@ choices = choices.assign(has_data=choices['DZ_Nr'].isin(stations_with_data))
 choices = choices.sort_values(['has_data', 'DZ_Name'], ascending=[False, True])
 labels = {int(r.DZ_Nr): r.DZ_Name if r.has_data else f"{r.DZ_Name} (no data)" for r in choices.itertuples()}
 
-c1, c2, c3 = st.columns(3, gap="large")
+c1, c2, c3 = st.columns(3, gap="medium")
 with c1:
     st.markdown('<div class="step">1 · Where</div>', unsafe_allow_html=True)
     station_id = st.selectbox("Counting station", list(labels), format_func=labels.get)
@@ -168,7 +168,7 @@ with c1:
 with c2:
     st.markdown('<div class="step">2 · Work</div>', unsafe_allow_html=True)
     shift = st.segmented_control("Working hours", list(SHIFT_LABELS), format_func=SHIFT_LABELS.get,
-                                 default='day') or 'day'
+                                 default='day', width='stretch') or 'day'
     max_hours = min(12, len(scheduler.SHIFTS[shift][1]))
     hours = st.slider("Hours per work session", 1, max_hours, min(4, max_hours),
                       help="One uninterrupted work session. The app looks for the quietest block of this length.")
