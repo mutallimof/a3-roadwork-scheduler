@@ -1,29 +1,34 @@
 """
 backtest.py — accuracy of the app's recommendations on held-out weeks.
 
-For each test week, only data from before the week is used. The script
-measures:
-  1. Expected traffic: how far the weekly profile (the app's averages)
-     is from the measured hourly counts of that week (MAE, MAPE; hours
-     with fewer than 10 vehicles are skipped).
-  2. Choice quality: the app's recommended window for that week, ranked
-     by measured traffic among all possible windows of the same length
-     in the same shift (rank 1 = it really was the quietest), and how
-     much more traffic it had than the quietest window.
+For each test week, only data from before the week is used (checked with
+an assertion). The script measures:
+  1. Hourly error: how far the profile the app would use is from the
+     measured hourly counts of that week (MAE, MAPE; hours with fewer than
+     10 vehicles are skipped).
+  2. Choice quality: the recommended window for that week, ranked by
+     measured traffic among all windows of the same length in the same
+     shift (rank 1 = it really was the quietest), and how much more traffic
+     it had than the quietest window.
+  3. Spread of the expected traffic: measured / expected for each chosen
+     window. The 10th and 90th percentiles are what the app shows as the
+     typical range (written with --json).
 
 The idea of testing on held-out data follows the aitraffic project
 (forecast_lgbm.time_split/evaluate, github.com/DanieMyl/aitraffic). Unlike
 its validation, no measured values from inside the test week are used.
 
-Usage (needs the full data, see scripts/fetch_data.py):
-    python scripts/backtest.py
-    python scripts/backtest.py --years 2023 --out docs/backtest_results.md
+Usage (needs the full data):
+    python scripts/backtest.py                       # profiles used by the app
+    python scripts/backtest.py --choice weekly --estimate weekly --out docs/backtest_weekly.md
+    python scripts/backtest.py --json accuracy.json  # file the app reads
 """
 
 import argparse
 import contextlib
 import datetime
 import io
+import json
 import os
 import sys
 
@@ -47,40 +52,59 @@ def measured_series(rows):
     return pd.Series(rows['traffic'].values, index=ts).sort_index()
 
 
-def choose(version, sd_before, side, shift, hours, start):
-    """Clock start of the first recommended window, for this app (v2) or the frozen v1 logic."""
+def choose(version, sd_before, side, shift, hours, start, choice_kind, estimate_kind, min_hours):
+    """(clock start, expected average) of the first recommended window."""
     if version == 'v1':
         r = ours_v1(sd_before, int(sd_before['Zst'].iloc[0]), side, APP_WORK_HOURS[shift], start.date())
-        return r['clock_start']
-    r = scheduler.recommend(sd_before, side, shift, hours, start.date(), weeks=1)
-    return None if r is None else pd.Timestamp(r['first_window_start'])
+        return r['clock_start'], r['expected']
+    with _min_hours(min_hours):
+        r = scheduler.recommend(sd_before, side, shift, hours, start.date(), weeks=1,
+                                choice_profile=choice_kind, estimate_profile=estimate_kind)
+    if r is None:
+        return None, None
+    return pd.Timestamp(r['first_window_start']), float(r['expected'])
 
 
-def run(df, version='v2'):
+@contextlib.contextmanager
+def _min_hours(value):
+    old = scheduler.MIN_SEASON_HOURS
+    scheduler.MIN_SEASON_HOURS = value
+    try:
+        yield
+    finally:
+        scheduler.MIN_SEASON_HOURS = old
+
+
+def run(df, version='v2', choice_kind='weekly', estimate_kind='weekly', min_hours=scheduler.MIN_SEASON_HOURS):
     prof_rows, choice_rows = [], []
     for week in TEST_WEEKS:
         start = pd.Timestamp(week)
+        end = start + pd.Timedelta(days=7)
         idx = pd.date_range(start, periods=168, freq='h')
         before = df[df['Datum'] < start]
+        assert before['Datum'].max() < start, "test week leaked into the profile"
+        months = scheduler.project_months(start.date(), 1)
         for station, sd_all in df.groupby('Zst'):
             sd_before = before[before['Zst'] == station]
             if sd_before.empty:
                 continue
+            week_all = sd_all[(sd_all['Datum'] >= start) & (sd_all['Datum'] < end + pd.Timedelta(days=1))]
             for side in ('R1', 'R2'):
                 rows, _ = scheduler.prepare(sd_before, side)
-                prof = scheduler.weekly_profile(rows)
-                actual_rows, _ = scheduler.prepare(sd_all[(sd_all['Datum'] >= start) & (sd_all['Datum'] < start + pd.Timedelta(days=7))], side)
+                prof = scheduler.build_profile(rows, months, estimate_kind if version == 'v2' else 'weekly', min_hours)
+                actual_rows, _ = scheduler.prepare(week_all[week_all['Datum'] < end], side)
                 act = measured_series(actual_rows).reindex(idx)
-                pred = prof['avg_traffic'].to_numpy()[[(t.dayofweek * 24 + t.hour) for t in idx]]
+                pred = prof['avg_traffic'].to_numpy()[[(t.day_of_week * 24 + t.hour) for t in idx]]
                 m = act.notna().to_numpy() & ~np.isnan(pred) & (act.to_numpy() >= 10)
                 a = act.to_numpy()[m]
                 prof_rows.append(dict(n=int(m.sum()), ae=float(np.abs(a - pred[m]).sum()),
                                       ape=float((np.abs(a - pred[m]) / a).sum())))
             for side, shift, hours in CASES:
-                chosen_t = choose(version, sd_before, side, shift, hours, start)
+                chosen_t, expected = choose(version, sd_before, side, shift, hours, start, choice_kind,
+                                            estimate_kind, min_hours)
                 if chosen_t is None:
                     continue
-                week_rows, _ = scheduler.prepare(sd_all[(sd_all['Datum'] >= start) & (sd_all['Datum'] < start + pd.Timedelta(days=8))], side)
+                week_rows, _ = scheduler.prepare(week_all, side)
                 series = measured_series(week_rows)
                 allowed = scheduler.SHIFTS[shift][1]
                 cands = []
@@ -92,43 +116,63 @@ def run(df, version='v2'):
                 if not cands:
                     continue
                 c = pd.DataFrame(cands, columns=['t', 'traffic'])
+                case = f"{side}, {shift}, {hours} h"
                 in_shift = all((chosen_t + pd.Timedelta(hours=k)).hour in allowed for k in range(hours))
-                in_week = start <= chosen_t < start + pd.Timedelta(days=7)
+                in_week = start <= chosen_t < end
                 if not (in_shift and in_week):
-                    choice_rows.append(dict(case=f"{side}, {shift}, {hours} h", rank=np.nan, n=len(c),
-                                            excess=np.nan, outside=1))
+                    choice_rows.append(dict(case=case, rank=np.nan, n=len(c), excess=np.nan, outside=1, ratio=np.nan))
                     continue
                 chosen = series.reindex(pd.date_range(chosen_t, periods=hours, freq='h'))
                 if chosen.isna().any():
                     continue          # chosen window falls on an excluded hour (holiday/implausible)
                 v = chosen.mean()
-                choice_rows.append(dict(case=f"{side}, {shift}, {hours} h", rank=int((c['traffic'] < v).sum()) + 1,
-                                        n=len(c), excess=v / c['traffic'].min() - 1, outside=0))
+                choice_rows.append(dict(case=case, rank=int((c['traffic'] < v).sum()) + 1, n=len(c),
+                                        excess=v / c['traffic'].min() - 1, outside=0, ratio=v / expected))
     p = pd.DataFrame(prof_rows)
-    accuracy = {'hours': int(p['n'].sum()), 'MAE': p['ae'].sum() / p['n'].sum(), 'MAPE': 100 * p['ape'].sum() / p['n'].sum()}
+    accuracy = {'hours': int(p['n'].sum()), 'MAE': p['ae'].sum() / p['n'].sum(),
+                'MAPE': 100 * p['ape'].sum() / p['n'].sum()}
     ch = pd.DataFrame(choice_rows)
     choice = ch.groupby('case').agg(tests=('rank', 'size'), outside=('outside', 'mean'),
                                     median_rank=('rank', 'median'),
                                     top3=('rank', lambda s: (s <= 3).sum() / len(s)),
                                     mean_excess=('excess', 'mean'), windows=('n', 'median'))
-    return accuracy, choice
+    overall = {'tests': int(len(ch)), 'top3': float((ch['rank'] <= 3).sum() / len(ch)),
+               'mean_excess': float(ch['excess'].mean()),
+               'window_ratio_p10': float(ch['ratio'].quantile(0.10)),
+               'window_ratio_p50': float(ch['ratio'].quantile(0.50)),
+               'window_ratio_p90': float(ch['ratio'].quantile(0.90))}
+    return accuracy, choice, overall
 
 
 def main():
     parser = argparse.ArgumentParser(description="Accuracy of the recommendations on held-out weeks.")
     parser.add_argument('--years', type=int, nargs='+', help="years to load (default: A3_YEARS / 2019 2023)")
-    parser.add_argument('--out', help="also write the result as markdown to this file")
+    parser.add_argument('--choice', choices=scheduler.PROFILE_KINDS, default=scheduler.DEFAULT_CHOICE_PROFILE,
+                        help=f"profile the window is chosen on (default: the app's, {scheduler.DEFAULT_CHOICE_PROFILE})")
+    parser.add_argument('--estimate', choices=scheduler.PROFILE_KINDS, default=scheduler.DEFAULT_ESTIMATE_PROFILE,
+                        help=f"profile for the expected traffic (default: the app's, {scheduler.DEFAULT_ESTIMATE_PROFILE})")
+    parser.add_argument('--min-hours', type=int, default=scheduler.MIN_SEASON_HOURS,
+                        help="fewest measured hours per slot before falling back to the weekly average")
     parser.add_argument('--version', choices=['v1', 'v2'], default='v2',
-                        help="v2 = this app; v1 = the logic before the comparison (frozen copy)")
+                        help="v2 = this app; v1 = the logic before the comparison with aitraffic (frozen copy)")
+    parser.add_argument('--out', help="also write the result as markdown to this file")
+    parser.add_argument('--json', help="write the summary the app reads (e.g. accuracy.json)")
     args = parser.parse_args()
     with contextlib.redirect_stdout(io.StringIO()):
         df = du.load_traffic_data(years=args.years)
     years = sorted(int(y) for y in df['year'].unique())
-    accuracy, choice = run(df, args.version)
-    lines = [f"Backtest ({args.version}) on held-out weeks ({', '.join(TEST_WEEKS)}), data years {years}, "
+    accuracy, choice, overall = run(df, args.version, args.choice, args.estimate, args.min_hours)
+    label = (args.version if args.version == 'v1' else
+             f"window chosen on '{args.choice}', expected traffic from '{args.estimate}', "
+             f"min {args.min_hours} hours per slot")
+    lines = [f"Backtest ({label}) on held-out weeks ({', '.join(TEST_WEEKS)}), data years {years}, "
              f"run {datetime.date.today():%Y-%m-%d}. Real BASt data.", "",
-             f"Expected traffic vs measured, per direction: {accuracy['hours']:,} hours, "
+             f"Hourly error of the expected traffic, per direction: {accuracy['hours']:,} hours, "
              f"MAE {accuracy['MAE']:.0f} vehicles/hour, MAPE {accuracy['MAPE']:.1f}%", "",
+             f"All cases: {overall['tests']} tests, chosen window in top 3: {overall['top3']:.0%}, "
+             f"traffic above the quietest window: {overall['mean_excess']:.0%}, measured / expected for the "
+             f"chosen window: 10th percentile {overall['window_ratio_p10']:.2f}, median "
+             f"{overall['window_ratio_p50']:.2f}, 90th percentile {overall['window_ratio_p90']:.2f}", "",
              "| Case | Tests | Outside shift or week | Median rank of chosen window | Chosen window in top 3 | "
              "Traffic above the quietest window | Windows per week |",
              "|---|---:|---:|---:|---:|---:|---:|"]
@@ -143,6 +187,13 @@ def main():
     if args.out:
         with open(args.out, 'w', encoding='utf-8') as f:
             f.write(text)
+    if args.json:
+        summary = {'choice_profile': args.choice, 'estimate_profile': args.estimate, 'min_hours': args.min_hours, 'years': years, 'test_weeks': TEST_WEEKS,
+                   'hourly_mae': round(accuracy['MAE'], 1), 'hourly_mape': round(accuracy['MAPE'], 1),
+                   **{k: round(v, 3) for k, v in overall.items()},
+                   'generated': f"{datetime.date.today():%Y-%m-%d}"}
+        with open(args.json, 'w', encoding='utf-8') as f:
+            json.dump(summary, f, indent=2)
     return 0
 
 

@@ -124,6 +124,39 @@ class WindowTest(unittest.TestCase):
         self.assertEqual(pd.Timestamp(r['first_window_start']).hour, v1['clock_start'].hour)
         self.assertAlmostEqual(float(r['best']['avg_traffic']), v1['expected'])
 
+    def test_project_and_season_months(self):
+        self.assertEqual(scheduler.project_months(datetime.date(2026, 12, 20), 3), {12, 1})
+        self.assertEqual(scheduler.season_months({12}, 'season'), {11, 12, 1})
+        self.assertEqual(scheduler.season_months({3}, 'month'), {3})
+
+    def test_seasonal_profile_falls_back_when_data_is_thin(self):
+        # January busy (2000), March quiet (500); only 1 week of data in March
+        df = pd.concat([frame('2023-01-02', 28, lambda t: 2000), frame('2023-03-06', 7, lambda t: 500)])
+        rows, _ = scheduler.prepare(df, 'R1')
+        seasonal = scheduler.build_profile(rows, {3}, 'month', min_hours=1)
+        self.assertTrue((seasonal['avg_traffic'] == 500).all())
+        self.assertTrue((seasonal['source'] == 'season').all())
+        thin = scheduler.build_profile(rows, {3}, 'month', min_hours=2)      # 1 hour per slot is too few
+        self.assertTrue((thin['source'] == 'all').all())
+        self.assertAlmostEqual(float(thin['avg_traffic'].iloc[0]), (4 * 2000 + 500) / 5)
+
+    def test_expected_traffic_comes_from_the_estimate_profile(self):
+        # Same weekly shape all year, but August twice as busy as the rest
+        df = frame('2023-05-01', 140, lambda t: (2 if t.month == 8 else 1) * busy_except({(6, 3): 100})(t))
+        aug = scheduler.recommend(df, 'R1', 'any', 1, datetime.date(2023, 8, 7), weeks=2)
+        nov = scheduler.recommend(df, 'R1', 'any', 1, datetime.date(2023, 11, 6), weeks=2)
+        self.assertEqual((int(aug['best']['dow']), int(aug['best']['clock'])), (6, 3))
+        self.assertEqual((int(nov['best']['dow']), int(nov['best']['clock'])), (6, 3))
+        self.assertGreater(aug['expected'], nov['expected'])
+        self.assertAlmostEqual(aug['reduction'], 1 - aug['expected'] / float(aug['busiest']['avg_traffic']))
+        weekly = scheduler.recommend(df, 'R1', 'any', 1, datetime.date(2023, 8, 7), weeks=2,
+                                     estimate_profile='weekly')
+        self.assertAlmostEqual(weekly['expected'], float(weekly['best']['avg_traffic']))
+
+    def test_expected_range(self):
+        self.assertEqual(scheduler.expected_range(100, {'window_ratio_p10': 0.5, 'window_ratio_p90': 1.5}), (50, 150))
+        self.assertIsNone(scheduler.expected_range(100, None))
+
     def test_no_data_returns_none(self):
         df = frame('2023-09-04', 1, lambda t: 100).iloc[0:0]
         self.assertIsNone(scheduler.recommend(df, 'both', 'any', 1, datetime.date(2023, 9, 4), weeks=1))

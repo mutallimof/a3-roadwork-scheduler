@@ -1,0 +1,26 @@
+{
+  "choice_profile": "weekly",
+  "estimate_profile": "season",
+  "min_hours": 4,
+  "years": [
+    2023
+  ],
+  "test_weeks": [
+    "2023-07-10",
+    "2023-08-07",
+    "2023-09-04",
+    "2023-10-02",
+    "2023-10-30",
+    "2023-11-27",
+    "2023-12-18"
+  ],
+  "hourly_mae": 205.1,
+  "hourly_mape": 17.6,
+  "tests": 665,
+  "top3": 0.848,
+  "mean_excess": 0.06,
+  "window_ratio_p10": 0.639,
+  "window_ratio_p50": 0.802,
+  "window_ratio_p90": 1.289,
+  "generated": "2026-10-26"
+}

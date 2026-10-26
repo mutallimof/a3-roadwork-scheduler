@@ -132,6 +132,67 @@ def weekly_profile(rows):
     return p.reindex(range(168))
 
 
+# Profiles the averages can be built from. 'weekly' uses all data; 'month'
+# only the calendar months of the project; 'season' those months plus one
+# month on either side. In 'month' and 'season', a weekday-hour slot with
+# fewer than MIN_SEASON_HOURS measured hours falls back to the weekly average.
+PROFILE_KINDS = ('weekly', 'month', 'season')
+# Chosen from the backtest (scripts/backtest.py, see README "Accuracy"):
+# the window is chosen on the all-year weekly profile, which ranked windows
+# best; the expected traffic comes from the seasonal profile, which had the
+# smaller hourly error.
+DEFAULT_CHOICE_PROFILE = 'weekly'
+DEFAULT_ESTIMATE_PROFILE = 'season'
+MIN_SEASON_HOURS = 4
+
+
+def project_months(start, weeks):
+    """Calendar months touched by the project period [start, start + weeks)."""
+    end = start + datetime.timedelta(weeks=weeks)
+    months, day = set(), start
+    while day < end:
+        months.add(day.month)
+        day += datetime.timedelta(days=1)
+    return months
+
+
+def season_months(months, kind):
+    if kind == 'month':
+        return set(months)
+    return {((m - 1 + k) % 12) + 1 for m in months for k in (-1, 0, 1)}
+
+
+def build_profile(rows, months=None, kind='weekly', min_hours=None):
+    """
+    Weekday-hour profile for the given project months. Adds a column
+    'source' ('season' or 'all') saying where each slot's average comes from.
+    """
+    if min_hours is None:
+        min_hours = MIN_SEASON_HOURS
+    base = weekly_profile(rows)
+    base['source'] = 'all'
+    if kind == 'weekly' or not months:
+        return base
+    sub = rows[rows['Datum'].dt.month.isin(season_months(months, kind))]
+    seasonal = weekly_profile(sub)
+    use = seasonal['hours'].fillna(0) >= min_hours
+    cols = ['avg_traffic', 'avg_truck_ratio', 'hours']
+    base.loc[use, cols] = seasonal.loc[use, cols]
+    base.loc[use, 'source'] = 'season'
+    return base
+
+
+def expected_range(value, accuracy):
+    """
+    Typical range for an expected window average, from the backtest's spread
+    of measured / expected (10th to 90th percentile). None if not available.
+    """
+    try:
+        return value * accuracy['window_ratio_p10'], value * accuracy['window_ratio_p90']
+    except (TypeError, KeyError):
+        return None
+
+
 def score_windows(profile, shift, hours):
     """
     All windows of `hours` consecutive slots inside the shift, scored.
@@ -163,34 +224,55 @@ def window_label(dow, clock, hours):
     return f"{DAY_NAMES[dow]}s, {clock:02d}:00–{end:02d}:00"
 
 
-def recommend(station_data, side, shift, hours, earliest_start, weeks):
+def window_average(profile, start_slot, hours):
+    slots = [(start_slot + k) % 168 for k in range(hours)]
+    return float(profile.loc[slots, 'avg_traffic'].mean())
+
+
+def recommend(station_data, side, shift, hours, earliest_start, weeks,
+              choice_profile=None, estimate_profile=None):
     """
     Recommendation for one station. Returns None if there is no usable
     data for the shift. Otherwise a dict with the best and worst window,
-    the reduction, the project dates and the holidays inside them.
+    the expected traffic, the reduction against the busiest window, the
+    project dates and the holidays inside them.
+
+    choice_profile: profile the window is chosen on; estimate_profile:
+    profile the expected traffic is taken from (both one of PROFILE_KINDS,
+    defaults DEFAULT_CHOICE_PROFILE / DEFAULT_ESTIMATE_PROFILE).
     """
     rows, excluded = prepare(station_data, side)
     if rows.empty:
         return None
-    profile = weekly_profile(rows)
+    choice_kind = choice_profile or DEFAULT_CHOICE_PROFILE
+    estimate_kind = estimate_profile or DEFAULT_ESTIMATE_PROFILE
+    months = project_months(earliest_start, weeks)
+    profile = build_profile(rows, months, choice_kind)
+    estimate = profile if estimate_kind == choice_kind else build_profile(rows, months, estimate_kind)
     windows = score_windows(profile, shift, hours)
     if windows.empty:
         return None
     best = windows.iloc[0]
     worst = windows.sort_values('score').iloc[0]
+    est_windows = score_windows(estimate, shift, hours)
+    expected = window_average(estimate, int(best['start_slot']), hours)
+    busiest = est_windows.sort_values('avg_traffic').iloc[-1]
     days_ahead = (int(best['dow']) - earliest_start.weekday()) % 7
     start_date = earliest_start + datetime.timedelta(days=days_ahead)
     end_date = start_date + datetime.timedelta(weeks=weeks)
     project_holidays = holidays_between(start_date, end_date)
     on_work_days = [(d, n) for d, n in project_holidays if d.weekday() == int(best['dow'])]
     return {
-        'best': best, 'worst': worst, 'windows': windows, 'profile': profile,
-        'reduction': 1 - best['avg_traffic'] / worst['avg_traffic'],
+        'best': best, 'worst': worst, 'windows': windows, 'profile': profile, 'estimate_profile': estimate,
+        'expected': expected, 'busiest': busiest,
+        'reduction': 1 - expected / float(busiest['avg_traffic']),
         'start_date': start_date, 'end_date': end_date,
         'first_window_start': datetime.datetime.combine(start_date, datetime.time(int(best['clock']))),
         'label': window_label(int(best['dow']), int(best['clock']), hours),
         'holidays': project_holidays, 'holidays_on_work_days': on_work_days,
-        'excluded': excluded, 'rows_used': len(rows),
+        'excluded': excluded, 'rows_used': len(rows), 'months': sorted(months),
+        'choice_profile': choice_kind, 'estimate_profile': estimate_kind,
+        'season_share': float((estimate['source'] == 'season').mean()),
     }
 
 
@@ -198,5 +280,5 @@ def compare_adapter(df, station, side, shift, hours, earliest_start):
     """Output in the shape scripts/compare_with_aitraffic.py expects."""
     r = recommend(df[df['Zst'] == station], side, shift, hours, earliest_start, weeks=1)
     t = pd.Timestamp(r['first_window_start'])
-    return {'clock_start': t, 'label': f"{t:%a %d %b %H:%M}", 'expected': float(r['best']['avg_traffic']),
+    return {'clock_start': t, 'label': f"{t:%a %d %b %H:%M}", 'expected': float(r['expected']),
             'reduction': float(r['reduction'])}
