@@ -29,7 +29,7 @@ def frame(start, days, traffic, station=9033):
         for stunde in range(1, 25):
             t = day + pd.Timedelta(hours=stunde - 1)
             v = traffic(t)
-            rows.append(dict(Zst=station, Datum=day, Wotag=day.dayofweek + 1, Stunde=stunde, year=day.year,
+            rows.append(dict(Zst=station, Datum=day, Wotag=day.day_of_week + 1, Stunde=stunde, year=day.year,
                              KFZ_R1=v, KFZ_R2=v, Lkw_R1=v // 10, Lkw_R2=v // 10, K_KFZ_R1='-', K_KFZ_R2='-'))
     df = pd.DataFrame(rows)
     df['total_traffic'] = df['KFZ_R1'] + df['KFZ_R2']
@@ -39,8 +39,8 @@ def frame(start, days, traffic, station=9033):
 
 
 def busy_except(quiet):
-    """1000 vehicles per hour, except the (dayofweek, hour) slots in `quiet` (vehicles given)."""
-    return lambda t: quiet.get((t.dayofweek, t.hour), 1000)
+    """1000 vehicles per hour, except the (day_of_week, hour) slots in `quiet` (vehicles given)."""
+    return lambda t: quiet.get((t.day_of_week, t.hour), 1000)
 
 
 class ConventionAndHolidaysTest(unittest.TestCase):
@@ -117,10 +117,10 @@ class WindowTest(unittest.TestCase):
 
     def test_one_hour_any_shift_matches_v1_slot(self):
         # Without holidays or flags, v2 with 1-hour windows picks the same data slot as v1
-        df = frame('2023-09-04', 14, lambda t: 300 + 100 * ((t.hour * 7 + t.dayofweek * 3) % 11))
+        df = frame('2023-09-04', 14, lambda t: 300 + 100 * ((t.hour * 7 + t.day_of_week * 3) % 11))
         v1 = ours_v1(df, 9033, 'both', '24h (always)', datetime.date(2023, 9, 4))
         r = scheduler.recommend(df, 'both', 'any', 1, datetime.date(2023, 9, 4), weeks=1)
-        self.assertEqual(pd.Timestamp(r['first_window_start']).dayofweek, v1['clock_start'].dayofweek)
+        self.assertEqual(pd.Timestamp(r['first_window_start']).day_of_week, v1['clock_start'].day_of_week)
         self.assertEqual(pd.Timestamp(r['first_window_start']).hour, v1['clock_start'].hour)
         self.assertAlmostEqual(float(r['best']['avg_traffic']), v1['expected'])
 

@@ -322,7 +322,7 @@ def check_data(df, full_year=True):
     rows = []
     for (zst, year), g in df.groupby(['Zst', 'year']):
         if full_year:
-            expected = 8784 if pd.Timestamp(year=int(year), month=12, day=31).dayofyear == 366 else 8760
+            expected = 8784 if pd.Timestamp(year=int(year), month=12, day=31).day_of_year == 366 else 8760
         else:
             expected = ((g['Datum'].max() - g['Datum'].min()).days + 1) * 24
         slots = g[['Datum', 'Stunde']].drop_duplicates()

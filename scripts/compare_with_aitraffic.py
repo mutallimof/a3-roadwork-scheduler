@@ -139,7 +139,7 @@ class Aitraffic:
         worst_volume = recs['total_kfz'].max()
         return {
             'clock_start': best['start'],
-            'label': f"{DAYS[best['start'].dayofweek]} {best['start']:%d %b %H:%M}",
+            'label': f"{DAYS[best['start'].day_of_week]} {best['start']:%d %b %H:%M}",
             'expected': float(best['mean_kfz_per_hour']),
             'reduction': 1 - best['total_kfz'] / worst_volume,
         }
